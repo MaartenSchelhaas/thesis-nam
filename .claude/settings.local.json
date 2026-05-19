@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\maart\\\\OneDrive\\\\Documenten\\\\Universiteit\\\\Scriptie\\\\python_repo\\\\original_neural_additive_models\" -Recurse | Where-Object {!$_.PSIsContainer} | Select-Object -ExpandProperty FullName2)",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\maart\\\\OneDrive\\\\Documenten\\\\Universiteit\\\\Scriptie\\\\python_repo\\\\nam-main-multitask\" -Recurse | Where-Object {!$_.PSIsContainer} | Select-Object -ExpandProperty FullName)"
+    ]
+  }
+}

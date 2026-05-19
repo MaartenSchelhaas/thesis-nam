@@ -222,3 +222,6 @@ __marimo__/
 .parquet
 .xlsx
 datasets/
+
+# Claude Code
+CLAUDE.md
