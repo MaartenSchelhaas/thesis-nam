@@ -225,3 +225,13 @@ datasets/
 
 # Claude Code
 CLAUDE.md
+.claude
+
+#Vscode
+.vscode
+
+# Local plan (untracked)
+PLAN.md
+
+# Training run artifacts
+runs/
