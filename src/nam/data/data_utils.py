@@ -123,14 +123,8 @@ def split(
     """
     Split arrays into train / val / test subsets with stratification.
 
-    Stratified splits preserve class balance across all three sets —
-    important for binary classification on imbalanced data.
-
-    Two-stage split:
-        Stage 1: carve out the test set (test_frac of total)
-        Stage 2: from the remainder, carve out the val set
-                 (val_frac_of_remainder = val_frac / (1 - test_frac))
-
+    Stratified splits preserve class balance across all three sets
+    
     Args:
         X:         Feature matrix, shape (n_samples, n_features)
         y:         Target vector, shape (n_samples,)
