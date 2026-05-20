@@ -1,12 +1,8 @@
 """
-NAMDataset — generic PyTorch Dataset wrapper for tabular data.
+NAMDataset — generic PyTorch Dataset wrapper for tables.
 
 Converts preprocessed numpy arrays (X, y) into a torch Dataset so they
 can be fed to a DataLoader for batching and shuffling.
-
-Supports optional per-sample weights. A weight of 0 means the sample
-contributes nothing to the loss — used to handle NaN labels in future
-multitask extensions without changing the training loop.
 """
 
 import numpy as np
