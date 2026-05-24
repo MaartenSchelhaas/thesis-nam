@@ -1,50 +1,57 @@
 """
-ExU activation layer — the key building block of NAM.
+ExU activation layer
 
-Introduced in the original NAM paper (Agarwal et al., 2021).
-ExU stands for "Exp-centered Unit": it applies a learned exponential
-transformation before clipping, giving the network high sensitivity
-to small input changes (useful for learning sharp feature shapes).
+A simpler activation: linear transformation followed by ReLU.
 
-Forward pass:
-    out = relu1((x - bias) @ exp(weight))
-    where relu1 = clamp(., min=0, max=1)
-
-Weight init: truncated normal N(mean=4.0, std=0.5)
-    — large positive values so exp(weight) >> 1, creating high initial
-    sensitivity that the optimizer can dial back as needed.
-Bias init: truncated normal N(mean=0, std=0.5)
-    — centers the input transformation near zero.
-
-Reference: original_neural_additive_models/models.py  ActivationLayer (ExU branch)
-PyTorch reference: nam-main-multitask/nam-main/nam/models/activation/exu.py
 """
 
 import torch
 import torch.nn as nn
-
+ 
 
 class ExU(nn.Module):
-    """
-    ExU activation: (x - bias) @ exp(weight), clipped to [0, 1].
+    """Exu activation layer"""
 
-    Args:
-        in_features: Input dimensionality (1 for a single-feature subnet).
-        num_units:   Number of output units (width of this layer).
-    """
+    def __init__(self, in_features: int, out_features: int):
+        """Initialize the ExU with random parameters
 
-    def __init__(self, in_features: int, num_units: int):
+        Args:
+            in_features (int): Amount of input features
+            out_features (int): Amount of output features
+        
+        Attributes:
+            w (nn.Parameter): Weight matrix of shape (in_features, out_features).
+            b (nn.Parameter): Bias vector of shape (in_features,).
+        """
         super().__init__()
-        # TODO: define self.weight as nn.Parameter, shape (in_features, num_units)
-        #       init with truncated normal N(mean=4.0, std=0.5)
-        # TODO: define self.bias as nn.Parameter, shape (in_features,)
-        #       init with truncated normal N(mean=0, std=0.5)
-        # Hint: torch.nn.init has no truncated_normal — sample from normal and
-        #       clamp to ±2*std (common approximation used in the reference code)
-        raise NotImplementedError
+        self.w = nn.Parameter(torch.empty(in_features, out_features))
+        self.b = nn.Parameter(torch.empty(in_features))
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # TODO: compute (x - self.bias) @ torch.exp(self.weight)
-        # TODO: clamp result to [0, 1]  (ReLU-1 / relu1)
-        # TODO: return clamped tensor
-        raise NotImplementedError
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        """Function to initialize the weights and biases. 
+        """
+        nn.init.trunc_normal_(self.w, mean=4.0, std=0.5) 
+        nn.init.trunc_normal_(self.b, std=0.5)
+
+    def forward(self, x: torch.Tensor, n: int =1) -> torch.Tensor:
+        """Forward pass for ExU.
+        Max value between 0 and n.
+
+        Args:
+            x (torch.Tensor): Input of shape (batch_size, in_features).
+            n (int): Activation value cap
+
+
+        Returns:
+            torch.Tensor: Output of shape (batch_size, out_features).
+        """
+
+        output = (x - self.b) @ torch.exp(self.w)
+        output = torch.relu(output)
+        output = torch.clamp(output,0,n)
+        return output
+        
+
+  
