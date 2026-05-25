@@ -22,8 +22,7 @@ PyTorch reference: nam-main-multitask/nam-main/nam/models/featurenn.py
 
 import torch
 import torch.nn as nn
-from .activation.exu import ExU
-from .activation.relu import LinReLU
+from .activation import ExU, LinReLU
 
 
 class FeatureNN(nn.Module):
@@ -46,24 +45,32 @@ class FeatureNN(nn.Module):
         activation: str = "exu",
     ):
         super().__init__()
-        # TODO: instantiate activation layer:
-        #       ExU(in_features=1, num_units=num_units) if activation == 'exu'
-        #       LinReLU(in_features=1, num_units=num_units) if activation == 'relu'
+        
+        self.dropout = nn.Dropout(p=dropout)
+        layers = []
 
-        # TODO: build hidden layers as nn.Sequential or nn.ModuleList:
-        #       for each size in hidden_sizes:
-        #           Linear(num_units → size) + ReLU + Dropout(dropout)
-        #       (update num_units to track current width between layers)
+        #First layer
+        if activation == "exu":
+            layers.append(ExU(in_features=1, out_features=num_units))
+        elif activation == "relu":
+            layers.append(LinReLU(in_features=1, out_features=num_units))
+        else:
+            raise ValueError(f"Unknown activation '{activation}'. Use 'exu' or 'relu'.")
+        layers.append(self.dropout)
 
-        # TODO: output layer: Linear(current_width → 1, bias=False)
+        #Hidden layers
+        current_width = num_units
+        for size in hidden_sizes:
+            layers.append(nn.Linear(in_features=current_width, out_features=size))
+            layers.append(nn.ReLU())
+            layers.append(self.dropout)
+            current_width = size
 
-        # TODO: store dropout rate for use in forward if needed
-        raise NotImplementedError
+        #Last layer
+        layers.append(nn.Linear(in_features=current_width, out_features=1,bias=False))
+
+        self.model = nn.Sequential(*layers)
+
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x shape: (batch_size, 1)  — a single feature column
-        # TODO: pass through activation layer
-        # TODO: pass through each hidden layer (Linear + ReLU + Dropout)
-        # TODO: pass through output layer
-        # TODO: return output of shape (batch_size, 1)
-        raise NotImplementedError
+        return self.model(x)

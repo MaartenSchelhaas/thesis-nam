@@ -1,8 +1,6 @@
 """
 ExU activation layer
 
-A simpler activation: linear transformation followed by ReLU.
-
 """
 
 import torch
