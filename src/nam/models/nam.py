@@ -86,9 +86,6 @@ class NAM(nn.Module):
         Returns:
             _type_: Returns the final prediction, plus the individual contributions. 
         """
-        # x shape: 
-        # TODO: for each feature i, slice x[:, i:i+1] and pass through feature_nns[i]
-        #       result per feature: (batch_size, 1)
 
         #Pass the respective columns to each feature subnet
         individual_outputs = self.calc_outputs(x)
