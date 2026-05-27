@@ -4,21 +4,12 @@ Loss functions for NAM training.
 The total loss has three components:
     1. Base loss: BCE (classification) or MSE (regression), per-sample weighted.
     2. Output penalty: penalises large individual feature contributions.
-       Encourages the model to spread signal across features rather than
-       concentrating it in one, improving interpretability.
     3. L2 regularisation: standard weight decay across all parameters.
-
-Components 2 and 3 are controlled by config.output_regularization and
-config.l2_regularization respectively. Setting both to 0 gives plain BCE/MSE.
-
-Reference: original_neural_additive_models/graph_builder.py  penalized_loss
-PyTorch reference: nam-main-multitask/nam-main/nam/trainer/losses.py
 """
 
 import torch
 import torch.nn as nn
 from ..models.nam import NAM
-
 
 def penalized_loss(
     logits: torch.Tensor,
