@@ -44,9 +44,6 @@ class FeatureNN(nn.Module):
                                             Defaults to [64, 32]
             dropout (float, optional): Dropout probability applied after each hidden layer. Defaults to 0.5.
             activation (str, optional): 'exu' or 'relu', selects the activation layer type. Defaults to "exu".
-
-        Raises:
-            ValueError: _description_
         """
         super().__init__()
         

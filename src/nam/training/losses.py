@@ -69,15 +69,14 @@ def output_penalty(fnn_outputs: torch.Tensor, lambda1: float) -> torch.Tensor:
     """Calculate output penalty, this penalizes large individual feature subnet
     outputs. 
     This is analagous to calculating the mean (squared) subnet output for each observation, 
-    and summing those. 
+    and then taking the mean over each observation. 
     Args:
         fnn_outputs (torch.Tensor): Per-feature subnet outputs, shape (batch_size, num_features).
 
     Returns:
         torch.Tensor: Scalar penalty tensor.
-    """
-    #TODO checken of dit wel klopt, of nog delen door n. In de originele paper staat alleen delen door k tho. 
-    return (fnn_outputs ** 2).mean(dim=1).sum() * lambda1
+    """ 
+    return (fnn_outputs ** 2).mean() * lambda1
 
 def l2_penalty(model: nn.Module, num_features: int, lambda2: float) -> torch.Tensor:
     """Penalise large model weights (weight decay).
