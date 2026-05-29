@@ -10,10 +10,12 @@ to scripts/train.py — the trainer loads it into a NAMConfig instance.
 """
 
 from dataclasses import dataclass, field
-
+import yaml
 
 @dataclass
 class NAMConfig:
+    dataset_path: str = ""
+
     # --- Model architecture ---
     num_units: int = 64
     # Width of the activation layer (ExU/LinReLU) in each FeatureNN.
@@ -65,3 +67,8 @@ class NAMConfig:
     task: str = "classification"
     # 'classification' → binary cross-entropy loss + AUROC metric
     # 'regression'     → MSE loss + RMSE metric
+
+def load_config(path: str) -> NAMConfig:
+    with open(path) as f:
+        raw = yaml.safe_load(f)
+    return NAMConfig(**raw)
