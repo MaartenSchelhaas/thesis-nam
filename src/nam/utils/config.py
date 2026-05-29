@@ -47,6 +47,11 @@ class NAMConfig:
     decay_rate: float = 0.995
     # Multiplicative LR decay applied every epoch via StepLR(gamma=decay_rate).
 
+    # --- Data split ---
+    val_frac: float = 0.15
+    test_frac: float = 0.15
+    seed: int = 42
+
     # --- Training loop ---
     batch_size: int = 1024
     num_epochs: int = 1000

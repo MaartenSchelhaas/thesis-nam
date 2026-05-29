@@ -18,6 +18,7 @@ import pandas as pd
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 from sklearn.model_selection import train_test_split
 
+#TODO: Bij gebruik van meerdere datasets, abstract base class maken om te implementeren. 
 
 NUMERICAL_FEATURES: list[str] = [
     'age',
@@ -31,7 +32,7 @@ CATEGORICAL_FEATURES: list[str] = [
     'sex',
 ]
 
-TARGET_COLUMN: str = 'two_years_recid'
+TARGET_COLUMN: str = 'two_year_recid'
 
 
 def load_compas(path: str) -> pd.DataFrame:
@@ -54,7 +55,7 @@ def load_compas(path: str) -> pd.DataFrame:
 
 
 
-def preprocess(df: pd.DataFrame):
+def preprocess(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, list[str]]:
     """
     Clean and encode the COMPAS DataFrame into model-ready arrays.
 
@@ -91,7 +92,8 @@ def preprocess(df: pd.DataFrame):
     # Separate feature groups and target
     X_num = df[NUMERICAL_FEATURES]
     X_cat = df[CATEGORICAL_FEATURES]
-    y = df[TARGET_COLUMN]
+    y = df[TARGET_COLUMN].to_numpy()
+    
 
     #Scale numeric features
     num_scaler = MinMaxScaler()

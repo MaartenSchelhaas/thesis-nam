@@ -30,7 +30,7 @@ class ExU(nn.Module):
     def reset_parameters(self) -> None:
         """Function to initialize the weights and biases. 
         """
-        nn.init.trunc_normal_(self.w, mean=4.0, std=0.5) 
+        nn.init.trunc_normal_(self.w, mean=4.0, std=0.5,a=3, b=5) 
         nn.init.trunc_normal_(self.b, std=0.5)
 
     def forward(self, x: torch.Tensor, n: int =1) -> torch.Tensor:

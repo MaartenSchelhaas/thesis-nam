@@ -70,7 +70,7 @@ class NAM(nn.Module):
         """
         individual_outputs = []
         for i in range(self.num_features):
-            feature_input = inputs[:,i]
+            feature_input = inputs[:,i].unsqueeze(-1) #slice to keep the dimension (batch_size,1)
             feature_output = self.feature_nns[i](feature_input)
             individual_outputs.append(feature_output)
         return individual_outputs

@@ -76,6 +76,7 @@ def output_penalty(fnn_outputs: torch.Tensor, lambda1: float) -> torch.Tensor:
     Returns:
         torch.Tensor: Scalar penalty tensor.
     """
+    #TODO checken of dit wel klopt, of nog delen door n. In de originele paper staat alleen delen door k tho. 
     return (fnn_outputs ** 2).mean(dim=1).sum() * lambda1
 
 def l2_penalty(model: nn.Module, num_features: int, lambda2: float) -> torch.Tensor:
