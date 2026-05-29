@@ -15,6 +15,24 @@ Preprocessing conventions (matching the original):
 
 import numpy as np
 import pandas as pd
+from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
+from sklearn.model_selection import train_test_split
+
+#TODO: Bij gebruik van meerdere datasets, abstract base class maken om te implementeren. 
+
+NUMERICAL_FEATURES: list[str] = [
+    'age',
+    'priors_count',
+    'length_of_stay'
+]
+
+CATEGORICAL_FEATURES: list[str] = [
+    'c_charge_degree',
+    'race',
+    'sex',
+]
+
+TARGET_COLUMN: str = 'two_year_recid'
 
 
 def load_compas(path: str) -> pd.DataFrame:
@@ -31,10 +49,13 @@ def load_compas(path: str) -> pd.DataFrame:
         - pd.read_csv(path)
         - Return as-is (no filtering here)
     """
-    raise NotImplementedError
+
+    df = pd.read_csv(path)
+    return df
 
 
-def preprocess(df: pd.DataFrame):
+
+def preprocess(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, list[str]]:
     """
     Clean and encode the COMPAS DataFrame into model-ready arrays.
 
@@ -63,7 +84,35 @@ def preprocess(df: pd.DataFrame):
         - Build feature_names: numerical names + encoder.get_feature_names_out()
         - Return (X.astype(np.float32), y, feature_names)
     """
-    raise NotImplementedError
+    
+    columns = NUMERICAL_FEATURES + CATEGORICAL_FEATURES + [TARGET_COLUMN]
+    df['length_of_stay'] = (pd.to_datetime(df['c_jail_out']) - pd.to_datetime(df['c_jail_in'])).dt.days
+    df = df[columns].dropna().reset_index(drop=True)
+    
+    # Separate feature groups and target
+    X_num = df[NUMERICAL_FEATURES]
+    X_cat = df[CATEGORICAL_FEATURES]
+    y = df[TARGET_COLUMN].to_numpy()
+    
+
+    #Scale numeric features
+    num_scaler = MinMaxScaler()
+    X_num_scaled = num_scaler.fit_transform(X_num).astype(np.float32)
+    
+    #One-hot encoding for categorical features
+    cat_encoder = OneHotEncoder(sparse_output=False,dtype=np.float32)
+    X_cat_encoded = cat_encoder.fit_transform(X_cat)
+
+    # Build the full feature matrix
+    X = np.concatenate([X_num_scaled, X_cat_encoded], axis=1)
+
+    # Build human-readable feature names (for plots)
+    cat_feature_names = cat_encoder.get_feature_names_out(CATEGORICAL_FEATURES).tolist()
+    feature_names = NUMERICAL_FEATURES + cat_feature_names
+
+    return X, y, feature_names
+    
+
 
 
 def split(
@@ -72,13 +121,12 @@ def split(
     val_frac: float = 0.15,
     test_frac: float = 0.15,
     seed: int = 42,
-):
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Split arrays into train / val / test subsets with stratification.
 
-    Stratified so class balance is preserved across all three sets —
-    important for binary classification on imbalanced data.
-
+    Stratified splits preserve class balance across all three sets
+    
     Args:
         X:         Feature matrix, shape (n_samples, n_features)
         y:         Target vector, shape (n_samples,)
@@ -88,12 +136,24 @@ def split(
 
     Returns:
         (X_train, X_val, X_test, y_train, y_val, y_test) — all np.ndarray
-
-    TODO:
-        - Use sklearn train_test_split with stratify=y
-        - Stage 1: split off test set → test_frac of total
-        - Stage 2: split remainder → val_frac_of_remainder = val_frac / (1 - test_frac)
-        - Return six arrays in order: train, val, test
     """
-    raise NotImplementedError
+    # Stage 1: split off test set
+    X_trainval, X_test, y_trainval, y_test = train_test_split(
+        X, y,
+        test_size=test_frac,
+        stratify=y,
+        random_state=seed,
+    )
+
+    # Stage 2: split train/val from the remaining data
+    # val_frac is a fraction of the *total* data, so we need to adjust
+    val_frac_of_remainder = val_frac / (1.0 - test_frac)
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_trainval, y_trainval,
+        test_size=val_frac_of_remainder,
+        stratify=y_trainval,
+        random_state=seed,
+    )
+
+    return X_train, X_val, X_test, y_train, y_val, y_test
 

@@ -1,40 +1,23 @@
 """
-Trainer — training loop with checkpointing and early stopping.
+Trainer — training loop with early stopping.
 
-Designed to be interruptable: every epoch writes a checkpoint so training
-can be resumed exactly from where it left off with --resume.
+Handles training a single NAM instance: forward pass, backpropagation,
+learning rate scheduling, validation, and early stopping. The best model
+state (by validation metric) is retained in memory after training.
 
-Run layout (created automatically):
-    runs/<run_id>/
-        config.yaml           copy of the config used for this run
-        metrics.jsonl         one JSON line per epoch, appended (survives crashes)
-        checkpoints/
-            epoch_<N>.pt      full checkpoint every epoch
-        best.pt               overwritten whenever val metric improves
-
-Checkpoint format (dict saved with torch.save):
-    {
-        'epoch':            int,
-        'model_state':      model.state_dict(),
-        'optimizer_state':  optimizer.state_dict(),
-        'scheduler_state':  scheduler.state_dict(),
-        'config':           dataclasses.asdict(config),
-        'best_val_metric':  float,
-    }
-
-Reference: nam-main-multitask/nam-main/nam/trainer/trainer.py
+Usage:
+    trainer = Trainer(model=model, lr=0.001, ...)
+    trainer.train(train_loader, val_loader)
+    test_auc = trainer.evaluate(test_loader)
 """
 
-import json
-import shutil
-from dataclasses import asdict
 from pathlib import Path
+import copy
 
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from ..utils.config import NAMConfig
+from nam.models.nam import NAM
 from .losses import penalized_loss
 from .metrics import auroc, rmse
 
@@ -42,67 +25,141 @@ from .metrics import auroc, rmse
 class Trainer:
     """
     Manages the training loop, validation, checkpointing, and early stopping.
-
-    Args:
-        model:   NAM instance to train.
-        config:  NAMConfig with all hyperparameters.
-        run_dir: Path to the run directory (e.g. runs/20240101_120000/).
-                 Created by scripts/train.py before instantiating Trainer.
     """
 
-    def __init__(self, model: nn.Module, config: NAMConfig, run_dir: Path):
+    def __init__(
+        self,
+        model: NAM,
+        lr: float,
+        decay_rate: float,
+        output_regularization: float,
+        l2_regularization: float,
+        task: str,
+        num_epochs: int,
+        patience: int,
+        val_check_interval: int,
+        run_dir: str,
+    ):
+        """Initialise the NAM Trainer.
+
+        Args:
+            model (NAM): Already-initialised NAM instance to train.
+            lr (float): Initial Adam learning rate.
+            decay_rate (float): Multiplicative LR decay applied every epoch (StepLR gamma).
+            output_regularization (float): Coefficient for the feature output penalty term.
+            l2_regularization (float): Coefficient for L2 weight decay.
+            task (str): 'classification' or 'regression'
+            num_epochs (int): Maximum number of training epochs.
+            patience (int): Early stopping, stop if val metric doesn't improve for this many epochs.
+            val_check_interval (int): Evaluate on validation set every N epochs.
+            run_dir (Path): Directory to save checkpoints and metrics (created before passing in).
+        """
         self.model = model
-        self.config = config
+        self.output_regularization = output_regularization
+        self.l2_regularization = l2_regularization
+        self.task = task
+        self.num_epochs = num_epochs
+        self.patience = patience
+        self.val_check_interval = val_check_interval
         self.run_dir = Path(run_dir)
         self.checkpoint_dir = self.run_dir / "checkpoints"
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-        # TODO: initialise Adam optimizer: torch.optim.Adam(model.parameters(), lr=config.lr)
-        # TODO: initialise StepLR scheduler: step_size=1, gamma=config.decay_rate
-        #       (decays lr by decay_rate every epoch)
+        self.optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=1, gamma=decay_rate)
 
-        self.best_val_metric = None  # set to None until first validation
+        self.best_val_metric = 0.0 if task == "classification" else float("inf")
+        self.best_model_state = copy.deepcopy(model.state_dict())
         self.epochs_without_improvement = 0
         self.start_epoch = 0
-
-        raise NotImplementedError
 
     # ------------------------------------------------------------------
     # Core training methods
     # ------------------------------------------------------------------
 
     def _train_epoch(self, loader: DataLoader) -> float:
-        """
-        Run one full pass over the training set.
+        """Run one full pass over the training set.
+
+        Iterates all batches: forward pass → penalized loss → backward → optimizer step.
+
+        Args:
+            loader: Training DataLoader.
 
         Returns:
-            Mean training loss over all batches (float).
-
-        TODO:
-            - model.train()
-            - Iterate loader: (features, targets, weights) per batch
-            - Forward: output, fnn_outputs = model(features)
-            - Loss: penalized_loss(output, targets, weights, fnn_outputs, model, config)
-            - Backward + optimizer.step() + optimizer.zero_grad()
-            - Accumulate loss, return mean
+            Float: Mean loss per batch over the full epoch.
         """
-        raise NotImplementedError
+        self.model.train()
+        epoch_loss = 0.0
+        for X_batch, y_batch, weights in loader:
+            self.optimizer.zero_grad()
+            predictions, fnn_outputs = self.model(X_batch)
+            loss = penalized_loss(logits=predictions,
+                                targets=y_batch,
+                                weights=weights,
+                                fnn_outputs=fnn_outputs,
+                                model = self.model,
+                                output_regularization=self.output_regularization,
+                                l2_regularization=self.l2_regularization,
+                                task = self.task)
+            loss.backward()
+            self.optimizer.step()
+            epoch_loss += loss.item()
 
-    def _val_epoch(self, loader: DataLoader):
-        """
-        Evaluate on validation set without gradient computation.
+        return epoch_loss/ len(loader)
+    
+
+    def _val_epoch(self, loader: DataLoader) -> float:
+        """Calculate validation metric for this epoch. 
+
+        Args:
+            loader (DataLoader): Validation dataloader
 
         Returns:
-            (val_loss, val_metric) where val_metric is AUROC or RMSE depending on task.
-
-        TODO:
-            - model.eval()
-            - torch.no_grad() context
-            - Collect all logits and targets across batches
-            - Compute loss with penalized_loss
-            - Compute metric: auroc() for classification, rmse() for regression
+            float: Return validation metric for the specific task
         """
-        raise NotImplementedError
+        self.model.eval()
+        all_predictions = []
+        all_targets = []
+        with torch.no_grad():
+            for X_batch, y_batch, _ in loader:
+                predictions, _ = self.model(X_batch)
+                all_predictions.append(predictions)
+                all_targets.append(y_batch)
+
+        val_predictions = torch.cat(all_predictions)
+        val_targets = torch.cat(all_targets)
+        return self._compute_metric(val_predictions, val_targets)
+    
+    def _compute_metric(self, predictions: torch.Tensor, targets: torch.Tensor) -> float:
+        """Compute task-appropriate validation metric.
+
+        Args:
+            predictions (torch.Tensor): Raw model logits, shape (n,).
+            targets (torch.Tensor): Ground truth labels, shape (n,).
+
+        Returns:
+            AUROC for classification, RMSE for regression.
+        """
+        if self.task == "classification":
+            return auroc(predictions, targets)
+        else:
+            return rmse(predictions, targets)
+        
+    def _is_improved(self, metric: float) -> bool:
+        """Check if the current validation metric is an improvement over the best so far.
+
+        Args:
+            metric (float): Current validation metric.
+
+        Returns:
+            bool: True if improved, False otherwise.
+        """
+        if self.task == "classification":
+            return metric > self.best_val_metric  # higher AUROC is better
+        else:
+            return metric < self.best_val_metric  # lower RMSE is better
+
+
 
     def _save_checkpoint(self, epoch: int, is_best: bool = False):
         """
@@ -136,29 +193,46 @@ class Trainer:
     # Public interface
     # ------------------------------------------------------------------
 
-    def train(self, train_dataset, val_dataset):
+    def train(self, train_loader:DataLoader, val_loader:DataLoader):
+        """Run the full training loop with validation and early stopping.
+
+        Trains for up to num_epochs epochs. Validates every val_check_interval epochs,
+        saves the best model state, and stops early if val metric does not improve
+        for patience epochs.
+
+        Args:
+            train_loader: DataLoader for training data.
+            val_loader: DataLoader for validation data.
         """
-        Full training loop from self.start_epoch to config.num_epochs.
 
-        Flow per epoch:
-            1. _train_epoch
-            2. Every val_check_interval epochs: _val_epoch
-               a. _log_metrics
-               b. _save_checkpoint (is_best if improved)
-               c. Check early stopping patience
-            3. scheduler.step()
+        for epoch in range(self.start_epoch, self.num_epochs):
+            epoch_loss = self._train_epoch(train_loader)
 
-        Early stopping: if val metric does not improve for config.patience epochs,
-        print a message and break.
+            #Run validation for every val_check_interval_epoch
+            if (epoch + 1) % self.val_check_interval == 0:
+                
+                metric = self._val_epoch(val_loader)
 
-        TODO:
-            - Create DataLoaders for train_dataset and val_dataset
-              (shuffle=True for train, False for val, batch_size from config)
-            - Loop epochs from self.start_epoch to config.num_epochs
-            - Implement the flow above
-            - Print progress each val check (epoch, train_loss, val_metric)
-        """
-        raise NotImplementedError
+                if self._is_improved(metric):
+                    self.best_val_metric = metric
+                    self.best_model_state = copy.deepcopy(self.model.state_dict())
+                    self.epochs_without_improvement = 0
+                else:
+                    #We only do this for every val_check_interval epoch.
+                    self.epochs_without_improvement += self.val_check_interval
+
+                if self.epochs_without_improvement >= self.patience:
+                    print(f"Early stopping at epoch {epoch+1}")
+                    break
+
+            if epoch == 0 or (epoch + 1) % 100 == 0:
+                print(f"Epoch {epoch+1}/{self.num_epochs}| Epoch loss = {epoch_loss:.4f} | best={self.best_val_metric:.4f}")
+
+            self.scheduler.step()
+        
+    def evaluate(self, loader: DataLoader) -> float:
+        self.model.load_state_dict(self.best_model_state)
+        return self._val_epoch(loader)
 
     def resume(self, checkpoint_path: str):
         """

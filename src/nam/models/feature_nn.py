@@ -1,9 +1,7 @@
 """
 FeatureNN — a single-feature neural network subnet.
 
-Each input feature gets its own FeatureNN. This is what makes NAM
-additive and interpretable: feature i only ever sees x[:, i], so its
-output is a learned function purely of that one variable.
+Each input feature gets its own FeatureNN.
 
 Architecture:
     activation_layer (ExU or LinReLU, in=1 → num_units)
@@ -22,20 +20,12 @@ PyTorch reference: nam-main-multitask/nam-main/nam/models/featurenn.py
 
 import torch
 import torch.nn as nn
-from .activation.exu import ExU
-from .activation.relu import LinReLU
+from .activation import ExU, LinReLU
 
 
 class FeatureNN(nn.Module):
     """
     Single-feature subnet: maps scalar input x_i → scalar output f_i(x_i).
-
-    Args:
-        num_units:    Width of the activation layer (and hidden layers).
-        hidden_sizes: List of hidden layer widths after the activation layer.
-                      Empty list → shallow network (activation layer + output only).
-        dropout:      Dropout probability applied after each hidden layer.
-        activation:   'exu' or 'relu' — selects the activation layer type.
     """
 
     def __init__(
@@ -45,25 +35,51 @@ class FeatureNN(nn.Module):
         dropout: float = 0.5,
         activation: str = "exu",
     ):
+        """Initialize the feature model
+
+        Args:
+            num_units (int, optional): Width of the activation layer. Defaults to 64.
+            hidden_sizes (list, optional):  List of hidden layer widths after the activation layer.
+                                            Empty list → shallow network (activation layer + output only).
+                                            Defaults to [64, 32]
+            dropout (float, optional): Dropout probability applied after each hidden layer. Defaults to 0.5.
+            activation (str, optional): 'exu' or 'relu', selects the activation layer type. Defaults to "exu".
+        """
         super().__init__()
-        # TODO: instantiate activation layer:
-        #       ExU(in_features=1, num_units=num_units) if activation == 'exu'
-        #       LinReLU(in_features=1, num_units=num_units) if activation == 'relu'
+        
+        self.dropout = nn.Dropout(p=dropout)
+        layers = []
 
-        # TODO: build hidden layers as nn.Sequential or nn.ModuleList:
-        #       for each size in hidden_sizes:
-        #           Linear(num_units → size) + ReLU + Dropout(dropout)
-        #       (update num_units to track current width between layers)
+        #First layer
+        if activation == "exu":
+            layers.append(ExU(in_features=1, out_features=num_units))
+        elif activation == "relu":
+            layers.append(LinReLU(in_features=1, out_features=num_units))
+        else:
+            raise ValueError(f"Unknown activation '{activation}'. Use 'exu' or 'relu'.")
+        layers.append(self.dropout)
 
-        # TODO: output layer: Linear(current_width → 1, bias=False)
+        #Hidden layers
+        current_width = num_units
+        for size in hidden_sizes:
+            layers.append(nn.Linear(in_features=current_width, out_features=size))
+            layers.append(nn.ReLU())
+            layers.append(self.dropout)
+            current_width = size
 
-        # TODO: store dropout rate for use in forward if needed
-        raise NotImplementedError
+        #Last layer
+        layers.append(nn.Linear(in_features=current_width, out_features=1,bias=False))
+
+        self.model = nn.Sequential(*layers)
+
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x shape: (batch_size, 1)  — a single feature column
-        # TODO: pass through activation layer
-        # TODO: pass through each hidden layer (Linear + ReLU + Dropout)
-        # TODO: pass through output layer
-        # TODO: return output of shape (batch_size, 1)
-        raise NotImplementedError
+        """Forward pass trough the model
+
+        Args:
+            x (torch.Tensor): Input value to pass through the model
+
+        Returns:
+            torch.Tensor: Individual contribution of the input value to the prediction. 
+        """
+        return self.model(x)

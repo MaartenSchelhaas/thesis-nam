@@ -10,10 +10,12 @@ to scripts/train.py — the trainer loads it into a NAMConfig instance.
 """
 
 from dataclasses import dataclass, field
-
+import yaml
 
 @dataclass
 class NAMConfig:
+    dataset_path: str = ""
+
     # --- Model architecture ---
     num_units: int = 64
     # Width of the activation layer (ExU/LinReLU) in each FeatureNN.
@@ -47,6 +49,11 @@ class NAMConfig:
     decay_rate: float = 0.995
     # Multiplicative LR decay applied every epoch via StepLR(gamma=decay_rate).
 
+    # --- Data split ---
+    val_frac: float = 0.15
+    test_frac: float = 0.15
+    seed: int = 42
+
     # --- Training loop ---
     batch_size: int = 1024
     num_epochs: int = 1000
@@ -60,3 +67,8 @@ class NAMConfig:
     task: str = "classification"
     # 'classification' → binary cross-entropy loss + AUROC metric
     # 'regression'     → MSE loss + RMSE metric
+
+def load_config(path: str) -> NAMConfig:
+    with open(path) as f:
+        raw = yaml.safe_load(f)
+    return NAMConfig(**raw)

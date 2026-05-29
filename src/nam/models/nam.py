@@ -1,29 +1,10 @@
 """
 NAM — Neural Additive Model.
 
-Aggregates one FeatureNN per input feature into an additive model:
+Each input feature gets its own FeatureNN subnet, learned functions f_i(x_i)
+are summed to produce the final prediction:
 
-    NAM(x) = bias + Σ_i  f_i(x_i)
-
-where each f_i is an independent FeatureNN that sees only feature i.
-This additivity is what makes NAM interpretable: you can plot each
-f_i separately to understand its contribution.
-
-Feature dropout: during training, randomly zero out entire feature
-outputs (not individual neurons) before summation. This regularises
-the model and prevents any single feature from dominating.
-
-Returns a tuple (output, feature_outputs):
-    output         : (batch_size,)        — final prediction logit
-    feature_outputs: (batch_size, n_feats) — per-feature contributions
-                     needed by the output_penalty regularisation term in the loss.
-
-Design note for future interaction extension:
-    Adding pairwise interactions only requires appending InteractionNN
-    outputs to feature_outputs before the sum — no other changes needed.
-
-Reference: original_neural_additive_models/models.py  NAM
-PyTorch reference: nam-main-multitask/nam-main/nam/models/nam.py
+    y = b + f_0(x_0) + f_1(x_1) + ... + f_n(x_n)
 """
 
 import torch
@@ -41,35 +22,78 @@ class NAM(nn.Module):
         config:       NAMConfig dataclass with all hyperparameters.
     """
 
-    def __init__(self, num_features: int, config: NAMConfig):
+    def __init__(
+        self,
+        num_features: int,
+        num_units: int, #TODO: int for now, reference uses a list. Dont see a use for that though
+        hidden_sizes: list,
+        dropout: float,
+        feature_dropout: float,
+        activation: str,
+    ):
+        """Initialization of the Neural Additive Model class. 
+
+        Args:
+            num_features (int): Amount of input features
+            num_units (int): Width of the activation layer of each subnet
+            hidden_sizes (list): List of hidden layer widths after the activation layer.
+            dropout (float): Dropout probability applied after each hidden layer in the subnets.
+            feature_dropout (float): Probability of dropping an entire feature output before summation.
+            activation (str): Activation layer type, 'exu' or 'relu'.
+        """
         super().__init__()
         self.num_features = num_features
-        self.config = config
 
-        # TODO: create one FeatureNN per feature, stored in nn.ModuleList
-        #       so PyTorch tracks all parameters automatically
-        #       each FeatureNN receives: num_units, hidden_sizes, dropout, activation from config
 
-        # TODO: feature-level dropout: nn.Dropout(config.feature_dropout)
-        #       this drops entire feature outputs, not individual neurons
+        self.feature_nns = nn.ModuleList([
+            FeatureNN(
+                num_units=num_units,
+                hidden_sizes=hidden_sizes,
+                dropout = dropout,
+                activation=activation,
+            )
+            for _ in range(num_features)
+        ])
 
-        # TODO: learnable scalar bias: nn.Parameter(torch.zeros(1))
-        #       added to the sum of all feature outputs
+        self.dropout_layer =  nn.Dropout(p=feature_dropout)
+        self._bias = nn.Parameter(data=torch.zeros(1))
+    
+    def calc_outputs(self, inputs: torch.Tensor) -> list[torch.Tensor]:
+        """Pass each feature column through its dedicated FeatureNN subnet.
 
-        raise NotImplementedError
+        Args:
+            inputs (torch.Tensor): Input tensor of shape (batch_size, num_features).
+
+        Returns:
+            list[torch.Tensor]: List of num_features tensors, each of shape (batch_size, 1), 
+                                representing the learned contribution f_i(x_i) for each feature i.
+        """
+        individual_outputs = []
+        for i in range(self.num_features):
+            feature_input = inputs[:,i].unsqueeze(-1) #slice to keep the dimension (batch_size,1)
+            feature_output = self.feature_nns[i](feature_input)
+            individual_outputs.append(feature_output)
+        return individual_outputs
+
 
     def forward(self, x: torch.Tensor):
-        # x shape: (batch_size, num_features)
-        # TODO: for each feature i, slice x[:, i:i+1] and pass through feature_nns[i]
-        #       result per feature: (batch_size, 1)
+        """Forward pass of the NAM. Each column of x gets passed into a seperate subnet, on which we apply
+        feature dropout per observation, and we return the final prediction + bias term. 
 
-        # TODO: torch.cat all feature outputs along dim=1
-        #       → feature_outputs: (batch_size, num_features)
+        Args:
+            x (torch.Tensor): Input data, of size (batch_size, num_features)
 
-        # TODO: apply feature dropout to feature_outputs
+        Returns:
+            _type_: Returns the final prediction, plus the individual contributions. 
+        """
 
-        # TODO: sum across features (dim=1) + self.bias
-        #       → output: (batch_size,)
+        #Pass the respective columns to each feature subnet
+        individual_outputs = self.calc_outputs(x)
+        #Concenate indivdual tensors back toghether
+        conc_out = torch.cat(individual_outputs, dim=-1)
+        #Feature dropout per observation
+        dropout_out = self.dropout_layer(conc_out)
+        out = torch.sum(dropout_out, dim=-1)
 
-        # TODO: return (output, feature_outputs)
-        raise NotImplementedError
+        return out + self._bias, dropout_out
+

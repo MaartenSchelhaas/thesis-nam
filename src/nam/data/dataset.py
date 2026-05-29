@@ -1,12 +1,8 @@
 """
-NAMDataset — generic PyTorch Dataset wrapper for tabular data.
+NAMDataset — generic PyTorch Dataset wrapper for tables.
 
 Converts preprocessed numpy arrays (X, y) into a torch Dataset so they
 can be fed to a DataLoader for batching and shuffling.
-
-Supports optional per-sample weights. A weight of 0 means the sample
-contributes nothing to the loss — used to handle NaN labels in future
-multitask extensions without changing the training loop.
 """
 
 import numpy as np
@@ -30,18 +26,28 @@ class NAMDataset(Dataset):
         weight   : FloatTensor scalar
     """
 
-    def __init__(self, X: np.ndarray, y: np.ndarray, weights: np.ndarray = None):
-        # TODO: cast X to float32 tensor
-        # TODO: cast y to float32 tensor
-        # TODO: if weights is None, create all-ones float32 tensor of shape (n_samples,)
-        #       otherwise cast provided weights to float32 tensor
-        # TODO: assign to self.X, self.y, self.weights
-        raise NotImplementedError
+    def __init__(
+            self, 
+            X: np.ndarray, 
+            y: np.ndarray, 
+            weights: np.ndarray | None = None):
+
+        if np.isnan(y).any():
+            raise ValueError("y contains NaN values — run dropna() before creating NAMDataset")
+        
+        self.X = torch.tensor(X, dtype=torch.float32)
+        self.y = torch.tensor(y, dtype=torch.float32)
+
+        if weights is None:
+            # Default: all ones — every sample is equally weighted.
+            w = torch.ones_like(self.y)
+        else:
+            w = torch.tensor(weights, dtype=torch.float32)
+        
+        self.w = w
 
     def __len__(self) -> int:
-        # TODO: return number of samples (first dimension of self.X)
-        raise NotImplementedError
+        return len(self.X)
 
-    def __getitem__(self, idx: int):
-        # TODO: return tuple (self.X[idx], self.y[idx], self.weights[idx])
-        raise NotImplementedError
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor,torch.Tensor,torch.Tensor]: 
+        return self.X[idx], self.y[idx], self.w[idx]
