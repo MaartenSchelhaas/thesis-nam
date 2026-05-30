@@ -21,6 +21,8 @@ from nam.models.nam import NAM
 from .losses import penalized_loss
 from .metrics import auroc, rmse
 
+import optuna
+
 
 class Trainer:
     """
@@ -38,7 +40,7 @@ class Trainer:
         num_epochs: int,
         patience: int,
         val_check_interval: int,
-        run_dir: str,
+        run_dir: str | None = None
     ):
         """Initialise the NAM Trainer.
 
@@ -61,9 +63,15 @@ class Trainer:
         self.num_epochs = num_epochs
         self.patience = patience
         self.val_check_interval = val_check_interval
-        self.run_dir = Path(run_dir)
-        self.checkpoint_dir = self.run_dir / "checkpoints"
-        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+
+        if run_dir is not None:
+            self.run_dir = Path(run_dir)
+            self.checkpoint_dir = self.run_dir / "checkpoints"
+            self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            self.run_dir = None
+            self.checkpoint_dir = None
 
         self.optimizer = torch.optim.Adam(model.parameters(), lr=lr)
         self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=1, gamma=decay_rate)
@@ -193,7 +201,7 @@ class Trainer:
     # Public interface
     # ------------------------------------------------------------------
 
-    def train(self, train_loader:DataLoader, val_loader:DataLoader):
+    def train(self, train_loader:DataLoader, val_loader:DataLoader, trial: optuna.Trial | None =None):
         """Run the full training loop with validation and early stopping.
 
         Trains for up to num_epochs epochs. Validates every val_check_interval epochs,
@@ -212,6 +220,12 @@ class Trainer:
             if (epoch + 1) % self.val_check_interval == 0:
                 
                 metric = self._val_epoch(val_loader)
+
+                #For early pruning during hyperparameter tuning.
+                if trial is not None:
+                    trial.report(metric, epoch)
+                    if trial.should_prune():
+                        raise optuna.exceptions.TrialPruned()
 
                 if self._is_improved(metric):
                     self.best_val_metric = metric

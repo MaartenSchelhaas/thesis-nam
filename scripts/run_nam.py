@@ -15,7 +15,10 @@ def set_seed(seed: int):
     torch.manual_seed(seed)
 
 # --- Config ---
-config = load_config(r"C:\Users\maart\OneDrive\Documenten\Universiteit\Scriptie\python_repo\thesis-nam\configs\compas_baseline.yaml")
+#config = load_config(r"C:\Users\maart\OneDrive\Documenten\Universiteit\Scriptie\python_repo\thesis-nam\configs\compas_baseline.yaml")
+
+config = load_config(r"configs\compas-scores-two-years_tuned.yaml")
+
 set_seed(config.seed)
 
 # --- Data ---
@@ -50,7 +53,6 @@ trainer = Trainer(
     num_epochs=config.num_epochs,
     patience=config.patience,
     val_check_interval=config.val_check_interval,
-    run_dir="runs/compas_baseline",
 )
 
 trainer.train(train_loader, val_loader)
