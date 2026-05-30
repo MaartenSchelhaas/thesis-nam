@@ -17,7 +17,7 @@ def set_seed(seed: int):
 # --- Config ---
 #config = load_config(r"C:\Users\maart\OneDrive\Documenten\Universiteit\Scriptie\python_repo\thesis-nam\configs\compas_baseline.yaml")
 
-config = load_config(r"C:\Users\maart\OneDrive\Documenten\Universiteit\Scriptie\python_repo\thesis-nam\configs\compas-scores-two-years_tuned.yaml")
+config = load_config(r"configs\compas-scores-two-years_tuned.yaml")
 
 set_seed(config.seed)
 
