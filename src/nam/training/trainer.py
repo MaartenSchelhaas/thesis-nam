@@ -13,6 +13,7 @@ Usage:
 
 from pathlib import Path
 import copy
+import json, shutil
 
 import torch
 from torch.utils.data import DataLoader
@@ -167,33 +168,32 @@ class Trainer:
         else:
             return metric < self.best_val_metric  # lower RMSE is better
 
+    # ------------------------------------------------------------------
+    # Saving model
+    # ------------------------------------------------------------------
+
+    def save_model(self, path: Path):
+        """Save best model to disk
+
+        Args:
+            path (str): Path where to store the model in
+        """
+
+        torch.save(self.best_model_state,path)
 
 
     def _save_checkpoint(self, epoch: int, is_best: bool = False):
         """
         Save model + optimizer + scheduler state to disk.
 
-        Always saves to checkpoints/epoch_<epoch>.pt.
-        If is_best=True, also copies to best.pt.
-
-        TODO:
-            - Build checkpoint dict (see module docstring for format)
-            - torch.save to self.checkpoint_dir / f'epoch_{epoch}.pt'
-            - If is_best: shutil.copy to self.run_dir / 'best.pt'
+        Not implemented for now, compas doesnt take that long.
         """
         raise NotImplementedError
 
-    def _log_metrics(self, epoch: int, train_loss: float, val_loss: float, val_metric: float):
-        """
-        Append one JSON line to metrics.jsonl.
-
-        Appending (not overwriting) means the file survives an interrupted run
-        and can be read incrementally to plot training curves.
-
-        TODO:
-            - Build dict: {epoch, train_loss, val_loss, val_metric}
-            - Open self.run_dir / 'metrics.jsonl' in append mode
-            - json.dumps(dict) + newline
+    def _log_metrics(self, epoch: int, train_loss: float, val_metric: float):
+        """Append one JSON line to metrics.jsonl.
+        
+        Not implemented for now, compas doesnt take that long.
         """
         raise NotImplementedError
 
@@ -245,6 +245,14 @@ class Trainer:
             self.scheduler.step()
         
     def evaluate(self, loader: DataLoader) -> float:
+        """Evaluate the models performence on the input test data
+
+        Args:
+            loader (DataLoader): Test dataset data loader
+
+        Returns:
+            float: Metric
+        """
         self.model.load_state_dict(self.best_model_state)
         return self._val_epoch(loader)
 
@@ -263,5 +271,8 @@ class Trainer:
             - scheduler.load_state_dict(checkpoint['scheduler_state'])
             - self.start_epoch = checkpoint['epoch'] + 1
             - self.best_val_metric = checkpoint['best_val_metric']
+
+        Not yet necessary for COMPAS.
+
         """
         raise NotImplementedError

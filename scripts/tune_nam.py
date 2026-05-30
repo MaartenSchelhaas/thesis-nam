@@ -8,10 +8,10 @@ MedianPruner) and writes the best found configuration to a YAML file
 compatible with scripts/train.py.
 
 Usage:
-    python scripts/tune_nam.py --config configs/compas_search.yaml
+    python scripts/tune_nam.py
+    Change _CONFIG for different dataset.
 """
 
-import argparse
 from pathlib import Path
 
 import optuna
@@ -100,16 +100,13 @@ def save_best_config(study: optuna.Study, fixed_params: dict, output_path: Path)
     print(f"Best metric : {study.best_trial.value:.4f}")
     print(f"Best config saved to {output_path}")
 
+_CONFIG = r"C:\Users\maart\OneDrive\Documenten\Universiteit\Scriptie\python_repo\thesis-nam\configs\compas_search.yaml"
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True, help="Path to search-space YAML")
-    args = parser.parse_args()
-
     # --- Load config ---
-    fixed_params, search_space = load_search_config(args.config)
+    fixed_params, search_space = load_search_config(_CONFIG)
 
-    # --- Data (loaded once, not inside objective) ---
+    # --- Data  ---
     df = load_compas(fixed_params["dataset_path"])
     X, y, _ = preprocess(df)
     X_train, X_val, X_test, y_train, y_val, y_test = split(
@@ -140,7 +137,7 @@ def main():
     )
 
     # --- Save best config ---
-    output_path = Path(args.config).parent / f"{dataset_name}_tuned.yaml"
+    output_path = Path(_CONFIG).parent / f"{dataset_name}_tuned.yaml"
     save_best_config(study, fixed_params, output_path)
 
 
