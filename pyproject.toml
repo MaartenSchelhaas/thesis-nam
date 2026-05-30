@@ -23,4 +23,5 @@ dev = [
     "ruff",
     "mypy",
     "jupyter",
+    "nbstripout"
 ]
