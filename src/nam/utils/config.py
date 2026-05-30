@@ -72,3 +72,9 @@ def load_config(path: str) -> NAMConfig:
     with open(path) as f:
         raw = yaml.safe_load(f)
     return NAMConfig(**raw)
+
+def load_search_config(path: str) -> tuple[dict,dict]:
+    with open(path) as f:
+        raw = yaml.safe_load(f)
+    search_space = raw.pop("search_space", {})
+    return raw, search_space

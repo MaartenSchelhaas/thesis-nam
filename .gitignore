@@ -230,8 +230,8 @@ CLAUDE.md
 #Vscode
 .vscode
 
-# Local plan (untracked)
-PLAN.md
+# Local docs (untracked)
+docs/
 
 # Training run artifacts
 runs/
