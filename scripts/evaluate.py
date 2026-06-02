@@ -98,7 +98,13 @@ def evaluate_fold(ensembled_preds: torch.Tensor, targets: torch.Tensor, task: st
         float: AUC or RMSE
     """
     # TODO: compute and return auroc or rmse depending on task
-    raise NotImplementedError
+
+    if task == "classification":
+        return auroc(ensembled_preds, targets)
+    else:
+        return rmse(ensembled_preds, targets)
+
+
 
 
 def save_fold_metric(fold_dir: Path, metric: float, seeds: list[int]) -> None:
@@ -109,22 +115,25 @@ def save_fold_metric(fold_dir: Path, metric: float, seeds: list[int]) -> None:
         metric: AUC or RMSE for this fold
         seeds: seeds used for ensembling
     """
-    # TODO: build dict with metric, seeds, save as fold_metric.json
-    raise NotImplementedError
+
+    fold_dir.mkdir(parents=True, exist_ok=True)
+    record = {"metric": metric, "seeds": seeds}
+    with open(fold_dir / "fold_metric.json", "w") as f:
+        json.dump(record, f)
+
 
 
 def save_results(base_dir: Path, fold_metrics: list[float], seeds: list[int], n_folds: int) -> None:
-    """Save overall results to results.json.
-    
-    Args:
-        base_dir: run directory
-        fold_metrics: list of per-fold metrics
-        seeds: seeds used
-        n_folds: number of folds
-    """
-    # TODO: build dict with mean, std, fold_metrics, seeds, n_folds
-    # TODO: save as base_dir / 'results.json'
-    raise NotImplementedError
+    assert len(fold_metrics) == n_folds
+    record = {
+        "mean": float(np.mean(fold_metrics)),
+        "std": float(np.std(fold_metrics)),
+        "fold_metrics": fold_metrics,
+        "seeds": seeds,
+        "n_folds": n_folds,
+    }
+    with open(base_dir / "results.json", "w") as f:
+        json.dump(record, f)
 
 
 def evaluate_kfold(
@@ -146,19 +155,26 @@ def evaluate_kfold(
         dict with keys: fold_metrics, mean, std
     """
     kf = KFold(n_splits=n_folds, shuffle=True, random_state=config.seed)
+
     fold_metrics = []
 
     for fold_idx, (train_val_idx, test_idx) in enumerate(kf.split(X)):
         print(f"\n--- Fold {fold_idx} ---")
 
         fold_dir = base_dir / f'fold_{fold_idx}'
+        fold_dir.mkdir(parents=True, exist_ok=True)
+
+        
 
         # TODO: slice X, y into X_test, y_test using test_idx
         # TODO: split train_val_idx into train and val using config.val_frac
         # TODO: build test_loader
+        X_test = X[train_val_idx] 
+
 
         for seed in seeds:
             seed_dir = fold_dir / f'seed_{seed}'
+            seed_dir.mkdir(parents=True, exist_ok=True)
             # TODO: call run_single with correct splits, seed_dir, seed
             # TODO: get predictions with predict() on test_loader
             # TODO: save predictions to seed_dir / 'predictions.pt'
