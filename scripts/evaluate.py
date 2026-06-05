@@ -29,6 +29,7 @@ from nam.utils.config import NAMConfig
 from nam.models.nam import NAM
 from nam.training.metrics import auroc, rmse
 from nam.utils.config import load_config, load_search_config
+from nam.utils.device import get_device
 from scripts.train import run_single, build_model
 from scripts.tune_nam import tune_fold
 
@@ -43,8 +44,9 @@ def load_model(config: NAMConfig, checkpoint_path: Path, num_features: int) -> N
     Returns:
         NAM: Model filled with trained parameters, in eval mode.
     """
-    model = build_model(config, num_features=num_features)
-    model.load_state_dict(torch.load(checkpoint_path,weights_only=True))
+    device = get_device()
+    model = build_model(config, num_features=num_features).to(device)
+    model.load_state_dict(torch.load(checkpoint_path, map_location=device, weights_only=True))
     model.eval()
     return model
 
@@ -58,9 +60,11 @@ def predict(model: NAM, loader: DataLoader) -> torch.Tensor:
     Returns:
         torch.Tensor: Prediction logits
     """
+    device = get_device()
     all_predictions = []
     with torch.no_grad():
         for X_batch, _, _ in loader:
+            X_batch = X_batch.to(device)
             predictions, _ = model(X_batch)
             all_predictions.append(predictions)
     return torch.cat(all_predictions)
@@ -80,7 +84,7 @@ def ensemble_predictions(fold_dir: Path, n_runs: int) -> torch.Tensor:
 
     for i in range(n_runs):
         path = fold_dir / f'run_{i}' / 'predictions.pt'
-        logits = torch.load(path, weights_only=True)
+        logits = torch.load(path, weights_only=True, map_location="cpu")
         all_run_logits.append(logits)
 
     return torch.stack(all_run_logits).mean(dim=0)

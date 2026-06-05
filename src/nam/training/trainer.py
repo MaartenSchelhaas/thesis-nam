@@ -21,6 +21,7 @@ from torch.utils.data import DataLoader
 from nam.models.nam import NAM
 from .losses import penalized_loss
 from .metrics import auroc, rmse
+from nam.utils.device import get_device
 
 import optuna
 
@@ -74,6 +75,9 @@ class Trainer:
             self.run_dir = None
             self.checkpoint_dir = None
 
+        self.device = get_device()
+        self.model = model.to(self.device)
+
         self.optimizer = torch.optim.Adam(model.parameters(), lr=lr)
         self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=1, gamma=decay_rate)
 
@@ -100,6 +104,7 @@ class Trainer:
         self.model.train()
         epoch_loss = 0.0
         for X_batch, y_batch, weights in loader:
+            X_batch, y_batch, weights = X_batch.to(self.device), y_batch.to(self.device), weights.to(self.device)
             self.optimizer.zero_grad()
             predictions, fnn_outputs = self.model(X_batch)
             loss = penalized_loss(logits=predictions,
@@ -131,6 +136,7 @@ class Trainer:
         all_targets = []
         with torch.no_grad():
             for X_batch, y_batch, _ in loader:
+                X_batch, y_batch = X_batch.to(self.device), y_batch.to(self.device)
                 predictions, _ = self.model(X_batch)
                 all_predictions.append(predictions)
                 all_targets.append(y_batch)
