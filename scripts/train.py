@@ -39,7 +39,7 @@ def run_single(
     X_train, y_train,
     X_val,   y_val,
     run_dir: Path,
-    seed: int
+    seed: int | None = None
 ) -> None:
     """
     Core unit of work: one seed, one data split.
@@ -48,8 +48,9 @@ def run_single(
     Returns:
         float: test metric
     """
+    if seed is not None:
+        set_seed(seed)
 
-    set_seed(seed)
     run_dir.mkdir(parents=True, exist_ok=True)
 
     train_loader = DataLoader(NAMDataset(X_train, y_train), batch_size=config.batch_size, shuffle=True)
