@@ -47,7 +47,7 @@ def rmse(preds: torch.Tensor, targets: torch.Tensor) -> float:
         float: RMSE as a Python float.
     """
 
-    return torch.sqrt(torch.mean((preds-targets)**2)).item()
+    return torch.sqrt(torch.mean((preds.detach().cpu() - targets.detach().cpu())**2)).item()
 
 
     

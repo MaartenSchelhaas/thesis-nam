@@ -9,9 +9,9 @@ num_epochs: 100
 patience: 50
 val_check_interval: 10
 task: classification
-val_frac: 0.15
-test_frac: 0.15
-n_trials: 50 #amount of optuna trials
+val_frac: 0.10
+test_frac: 0.20
+n_trials: 20 #amount of optuna trials
 seed: 42
 
 # --- Search space ---

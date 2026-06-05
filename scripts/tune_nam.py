@@ -8,10 +8,10 @@ MedianPruner) and writes the best found configuration to a YAML file
 compatible with scripts/train.py.
 
 Usage:
-    python scripts/tune_nam.py --config configs/compas_search.yaml
+    python scripts/tune_nam.py
+    Change _CONFIG for different dataset.
 """
 
-import argparse
 from pathlib import Path
 
 import optuna
@@ -100,33 +100,33 @@ def save_best_config(study: optuna.Study, fixed_params: dict, output_path: Path)
     print(f"Best metric : {study.best_trial.value:.4f}")
     print(f"Best config saved to {output_path}")
 
+def tune_fold(
+    fixed_params: dict,
+    search_space: dict,
+    X_train,
+    y_train,
+    X_val,
+    y_val,
+    output_path: Path,
+    study_name: str = "fold_search",
+) -> Path:
+    """Run an Optuna study on a single train/val split and save the best config.
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True, help="Path to search-space YAML")
-    args = parser.parse_args()
+    Args:
+        fixed_params:  Non-tunable config fields (from load_search_config).
+        search_space:  Search space definition (from load_search_config).
+        X_train, y_train: Training data for this fold's tuning split.
+        X_val, y_val:     Validation data for this fold's tuning split.
+        output_path:   Where to write the best config YAML.
+        study_name:    Optuna study name.
 
-    # --- Load config ---
-    fixed_params, search_space = load_search_config(args.config)
-
-    # --- Data (loaded once, not inside objective) ---
-    df = load_compas(fixed_params["dataset_path"])
-    X, y, _ = preprocess(df)
-    X_train, X_val, X_test, y_train, y_val, y_test = split(
-        X, y, fixed_params["val_frac"], fixed_params["test_frac"], fixed_params["seed"]
-    )
-
-    # --- Study ---
-    dataset_name = Path(fixed_params["dataset_path"]).stem
-    db_path = Path("runs/optuna") / f"{dataset_name}.db"
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-
+    Returns:
+        output_path after saving.
+    """
     direction = "maximize" if fixed_params["task"] == "classification" else "minimize"
 
     study = optuna.create_study(
-        study_name=f"{dataset_name}_search",
-        storage=f"sqlite:///{db_path}",
-        load_if_exists=True,
+        study_name=study_name,
         direction=direction,
         sampler=optuna.samplers.TPESampler(),
         pruner=optuna.pruners.MedianPruner(),
@@ -139,9 +139,29 @@ def main():
         n_trials=fixed_params["n_trials"],
     )
 
-    # --- Save best config ---
-    output_path = Path(args.config).parent / f"{dataset_name}_tuned.yaml"
     save_best_config(study, fixed_params, output_path)
+    return output_path
+
+
+_CONFIG = r"C:\Users\maart\OneDrive\Documenten\Universiteit\Scriptie\python_repo\thesis-nam\configs\compas_search.yaml"
+
+def main():
+    # --- Load config ---
+    fixed_params, search_space = load_search_config(_CONFIG)
+
+    # --- Data  ---
+    df = load_compas(fixed_params["dataset_path"])
+    X, y, _ = preprocess(df)
+    X_train, X_val, X_test, y_train, y_val, y_test = split(
+        X, y, fixed_params["val_frac"], fixed_params["test_frac"], fixed_params["seed"]
+    )
+
+    # --- Study ---
+    dataset_name = Path(fixed_params["dataset_path"]).stem
+    output_path = Path(_CONFIG).parent / f"{dataset_name}_tuned.yaml"
+
+    tune_fold(fixed_params, search_space, X_train, y_train, X_val, y_val, output_path,
+              study_name=f"{dataset_name}_search")
 
 
 if __name__ == "__main__":
