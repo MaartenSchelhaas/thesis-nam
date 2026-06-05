@@ -235,3 +235,6 @@ docs/
 
 # Training run artifacts
 runs/
+
+# External reference repos
+GamiNet-master/
