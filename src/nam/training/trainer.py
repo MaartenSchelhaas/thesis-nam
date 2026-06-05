@@ -80,14 +80,11 @@ class Trainer:
             self.run_dir = None
             self.checkpoint_dir = None
 
-<<<<<<< HEAD
         self.device = get_device()
         self.model = model.to(self.device)
 
         self.optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-=======
         self.optimizer = torch.optim.Adam(params if params is not None else model.parameters(), lr=lr)
->>>>>>> d8b36df (na2m scaffoloding)
         self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=1, gamma=decay_rate)
 
         self.best_val_metric = 0.0 if task == "classification" else float("inf")
