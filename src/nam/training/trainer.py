@@ -42,7 +42,8 @@ class Trainer:
         num_epochs: int,
         patience: int,
         val_check_interval: int,
-        run_dir: str | None = None
+        run_dir: str | None = None,
+        params=None,
     ):
         """Initialise the NAM Trainer.
 
@@ -57,6 +58,10 @@ class Trainer:
             patience (int): Early stopping, stop if val metric doesn't improve for this many epochs.
             val_check_interval (int): Evaluate on validation set every N epochs.
             run_dir (Path): Directory to save checkpoints and metrics (created before passing in).
+            params: Optional iterable of parameters to optimize. Defaults to
+                model.parameters(). The NA2M orchestrator passes a parameter subset
+                (e.g. interaction-only params) when staging; rebuild the Trainer (or
+                its optimizer) after any structural model change.
         """
         self.model = model
         self.output_regularization = output_regularization
@@ -75,10 +80,14 @@ class Trainer:
             self.run_dir = None
             self.checkpoint_dir = None
 
+<<<<<<< HEAD
         self.device = get_device()
         self.model = model.to(self.device)
 
         self.optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+=======
+        self.optimizer = torch.optim.Adam(params if params is not None else model.parameters(), lr=lr)
+>>>>>>> d8b36df (na2m scaffoloding)
         self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=1, gamma=decay_rate)
 
         self.best_val_metric = 0.0 if task == "classification" else float("inf")
@@ -261,6 +270,14 @@ class Trainer:
         """
         self.model.load_state_dict(self.best_model_state)
         return self._val_epoch(loader)
+
+    def load_best(self):
+        """Restore the best (by val metric) weights into the model in place.
+
+        Use this in the NA2M harness before any extraction — do NOT rely on
+        evaluate()'s side effect for restoring best weights.
+        """
+        self.model.load_state_dict(self.best_model_state)
 
     def resume(self, checkpoint_path: str):
         """
