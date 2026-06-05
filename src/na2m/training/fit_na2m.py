@@ -68,16 +68,19 @@ def fit_na2m(
 
 
 def stage1_main(model, train_loader, val_loader, hp) -> None:
-    """Train the main bank (Trainer over main params), restore best.
+    """Train the main bank (Trainer over main params), restore best. Center
 
     Args:
         model: NA2M instance.
         train_loader: Internal training split loader.
         val_loader: Internal validation split loader.
         hp: Hyperparameters.
+        # stage-1 Trainer: clarity_lambda defaults to 0.0 (no interactions exist yet).
 
     TODO:
-        - Trainer over model.parameters() (only mains exist yet); train; load_best.
+        - Trainer over model.parameters() (only mains exist); train; load_best.
+        - Freeze _bias during this stage is NOT needed (mains-only, bias trains fine).
+        - model.center_main_effects(X_pool)   # fold per-subnet mean into _bias.
     """
     raise NotImplementedError
 
@@ -93,20 +96,44 @@ def stage2_select(model, train_loader, val_loader, X_pool, y_pool, hp) -> None:
         y_pool: 80% pool targets.
         hp: Hyperparameters (M, η, block-train epochs).
 
+        # Fine-tune Trainer: clarity ON, same coefficient as stage 2.
+        # clarity_lambda=hp.clarity_lambda
+
+
     TODO:
-        - FAST screen on main-model residual-equivalent predictions (nam.selection.fast)
-          → ranked (j,k) → top-M.
-        - model.add_interactions(top_M); REBUILD optimizer over interaction params only
-          (set_main_trainable(False)); block-train.
-        - η-prune: cumulative validation-loss sweep over ranked kept pairs
-          (evaluation only, NO retrain); remove_interaction for the dropped ones;
-          REBUILD optimizer after removals.
+        - FAST: fast_screen(main_model=model, X, y, task) -> ranked (j,k); top_M.
+        - add_interactions(top_M); set_main_trainable(False); ALSO freeze _bias for
+          block-train (it's about to be re-centered; let it not absorb signal);
+          REBUILD optimizer over interaction params only; block-train; load_best.
+        - add_interactions(top_M); set_main_trainable(False); ALSO freeze _bias for
+          block-train; REBUILD optimizer over interaction params only.
+        - Block-train with loss = task_loss + hp.clarity_lambda * model.clarity_loss(x),
+          SAME coefficient as stage 3 (matches GAMI-Net train_interaction). The penalty
+          acts on the frozen-mean parents and the training interaction: it shapes f_jk
+          toward orthogonality with its parents even at selection time. load_best.
+        - NOTE: parents are centered (end of stage 1) but interactions are NOT yet
+          centered here, so the f_jk factor carries a nonzero mean and the penalty is
+          slightly approximate at this point; this matches the reference, which centers
+          interactions only after block-training (center_interactions below).
+        - center_interactions(X_pool, fold_bias=False)   # per-term zero-mean, bias untouched.
+        - Contribution ranking = VARIANCE of each centered interaction output vector
+          on the TRAIN split (GAMI-Net moving_norm with w_i=1), descending.
+        - η-prune sweep on VAL, cumulative adds in ranking order, EVAL ONLY (no retrain):
+            losses=[l_0..l_M]; lo=min; rng=max-min;
+            if rng>0 and any((losses-lo)/rng < hp.loss_threshold):
+                k = first such index           # min-max-normalized rule (NOT (1+η)min)
+            else: k = argmin(losses)
+            survivors = ranking[:k]            # CHECK off-by-one vs reference prune
+        - remove_interaction for the dropped pairs (nothing folded yet → clean delete);
+          REBUILD optimizer.
+        - center_interactions(X_pool, fold_bias=True)     # fold survivors once.
+        - unfreeze _bias (stage 3 trains it).
     """
     raise NotImplementedError
 
 
 def stage3_finetune(model, train_loader, val_loader, hp) -> None:
-    """Unfreeze all params; fine-tune with the marginal-clarity penalty.
+    """Unfreeze all params; fine-tune with the marginal-clarity penalty; recenter.
 
     Args:
         model: NA2M instance (interactions selected & pruned).
@@ -114,15 +141,21 @@ def stage3_finetune(model, train_loader, val_loader, hp) -> None:
         val_loader: Internal validation split loader.
         hp: Hyperparameters (clarity-penalty coefficient, fine-tune epochs).
 
+        # Block-train Trainer: clarity ON, same coefficient as stage 3.
+        # clarity_lambda=hp.clarity_lambda
+
+
     TODO:
-        - set_main_trainable(True); REBUILD optimizer over ALL params.
-        - Fine-tune with model.clarity_loss(x) added to the loss; load_best.
+        - set_main_trainable(True); ensure _bias trainable; REBUILD optimizer over ALL params.
+        - Fine-tune: loss = task_loss + hp.clarity_lambda * model.clarity_loss(x); load_best.
+        - model.center_main_effects(X_pool)
+        - model.center_interactions(X_pool, fold_bias=True)   # re-center, matches GAMI-Net fine_tune_all.
     """
     raise NotImplementedError
 
 
 def stage4_concurvity(model, train_loader, val_loader, X_pool, y_pool, hp) -> int:
-    """Iteratively remove the worst concurve pair until all ≤ 0.5.
+    """Iteratively remove the worst concurve pair until all ≤ 0.5. re-fine-tune each pass.
 
     Args:
         model: NA2M instance (fine-tuned).
@@ -137,9 +170,17 @@ def stage4_concurvity(model, train_loader, val_loader, X_pool, y_pool, hp) -> in
         accuracy non-inferiority comparison; B does one, C may do several).
 
     TODO:
-        - Loop (capped): compute concurvity on fine-tuned subnets over the 80% pool.
-        - If max concurvity > 0.5: remove_interaction the single worst pair;
-          REBUILD optimizer; re-fine-tune (reuse stage3_finetune); increment count.
-        - Else break (fixed point). Return the pass count.
+        - passes = 0
+        - Loop (cap hp.max_concurvity_iters):
+            * scores = concurvity per active pair on X_pool, basis = ALL OTHER terms
+              (mains + other active interactions, exclude self); adj-R² with intercept;
+              p = K + (n_active_pairs - 1), recomputed each iter; score the RAW fitted
+              vector (purification = future work).
+            * worst_pair = max by (score, key) for DETERMINISTIC tie-break.
+            * if worst_score <= 0.5: break.
+            * remove_interaction(worst_pair)  (subtract-back handled inside); REBUILD opt.
+            * stage3_finetune(...)  (re-fine-tune + re-center); passes += 1
+        - Loop NEVER re-screens or re-adds (active set only shrinks).
+        - return passes
     """
     raise NotImplementedError

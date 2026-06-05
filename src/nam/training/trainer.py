@@ -44,6 +44,15 @@ class Trainer:
         val_check_interval: int,
         run_dir: str | None = None,
         params=None,
+
+        #clarity_lambda: float = 0.0,
+        # NA2M marginal-clarity coefficient. 0.0 disables the term, which is the
+        # correct value for the frozen NAM baseline and for stage 1 (no interactions
+        # exist). Stages 2 (block-train) and 3 (fine-tune) pass hp.clarity_lambda,
+        # the SAME value in both, matching GAMI-Net's shared reg_clarity.
+
+
+
     ):
         """Initialise the NAM Trainer.
 
@@ -70,6 +79,7 @@ class Trainer:
         self.num_epochs = num_epochs
         self.patience = patience
         self.val_check_interval = val_check_interval
+        #self.clarity_lambda = clarity_lambda
 
 
         if run_dir is not None:
@@ -113,6 +123,15 @@ class Trainer:
             X_batch, y_batch, weights = X_batch.to(self.device), y_batch.to(self.device), weights.to(self.device)
             self.optimizer.zero_grad()
             predictions, fnn_outputs = self.model(X_batch)
+
+            # NA2M marginal-clarity penalty (no-op when clarity_lambda == 0, e.g. the
+            # frozen NAM baseline and stage 1). hasattr guards the baseline model, which
+            # has no clarity_loss method. Uses the SAME X_batch as the prediction so the
+            # penalty is measured on the training batch, as in GAMI-Net train_interaction.
+            #if self.clarity_lambda > 0.0 and hasattr(self.model, "clarity_loss"):
+            #    loss = loss + self.clarity_lambda * self.model.clarity_loss(X_batch)
+
+
             loss = penalized_loss(logits=predictions,
                                 targets=y_batch,
                                 weights=weights,

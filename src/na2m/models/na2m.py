@@ -69,13 +69,20 @@ class NA2M(nn.Module):
 
         TODO:
             - Build a TYPE-AWARE main bank as an nn.ModuleList indexed by feature:
-                FeatureNN for feature_meta[j].type == "num",
-                CategNet(n_levels) for feature_meta[j].type == "cat".
+                FeatureNN(num_units, hidden_sizes, dropout, activation) for type "num",
+                CategNet(n_levels) for type "cat".
             - self.interaction_nns = nn.ModuleDict()  (empty at init).
-            - self._bias = nn.Parameter(torch.zeros(1))  (the ONE model-wide intercept).
+            - self._bias = nn.Parameter(torch.zeros(1)).
             - self.dropout_layer = nn.Dropout(p=feature_dropout).
-            - Store num_features, feature_meta, and interaction hyperparameters
-              (needed when add_interactions builds new subnets).
+            - Store num_features, feature_meta, and interaction hyperparams
+              (inter_units / inter_hidden / inter_dropout) for add_interactions.
+            - Centering offsets:
+                self.register_buffer("main_centers", torch.zeros(num_features))
+                self.inter_centers = {}        # plain dict, key "j,k" -> tensor offset
+                self._inter_folded = {}        # key "j,k" -> bool, folded into _bias?
+              main_outputs / inter_outputs subtract the stored offset per term.
+              inter_centers/_inter_folded are populated by add_interactions (zero,
+              False) and updated by center_interactions. NOT buffers (dynamic keys).
         """
         raise NotImplementedError
 
@@ -90,9 +97,11 @@ class NA2M(nn.Module):
             pairs: List of (j, k) feature-index pairs to add.
 
         TODO:
-            - For each (j, k): key = f"{j},{k}"; skip if already present.
-            - Build InteractionNN(inter_units, inter_hidden, inter_dropout) into the dict.
-            - Caller MUST rebuild the optimizer afterwards.
+            - For each (j,k): key=f"{j},{k}"; skip if present.
+            - interaction_nns[key] = InteractionNN(inter_units, inter_hidden, inter_dropout).
+            - inter_centers[key] = torch.zeros(1, device=self._bias.device)
+            - _inter_folded[key] = False
+            - Caller MUST rebuild the optimizer.
         """
         raise NotImplementedError
 
@@ -104,8 +113,13 @@ class NA2M(nn.Module):
             k: Second feature index.
 
         TODO:
-            - del self.interaction_nns[f"{j},{k}"].
-            - Caller MUST rebuild the optimizer afterwards.
+            - key = f"{j},{k}".
+            - IF _inter_folded.get(key): with no_grad: self._bias -= inter_centers[key]
+              (the offset was added to _bias when folded; deleting the subnet removes
+               the matching '-offset' term, so the bias must give it back).
+            - inter_centers.pop(key, None); _inter_folded.pop(key, None)
+            - del interaction_nns[key]
+            - Caller MUST rebuild the optimizer.
         """
         raise NotImplementedError
 
@@ -117,6 +131,42 @@ class NA2M(nn.Module):
 
         TODO:
             - Iterate main-bank params, set p.requires_grad = flag.
+        """
+        raise NotImplementedError
+
+    def center_main_effects(self, X_pool: torch.Tensor) -> None:
+        """Fold each main subnet's CURRENT mean into _bias. Idempotent.
+        Call after stage1 AND re-call at the end of every fine-tune (stage 3, each
+        stage-4 pass). Pure reparameterisation — predictions unchanged.
+        TODO:
+            - eval() + no_grad throughout (restore train mode after if needed).
+            - For each j:
+                raw = main_nn_j(X_pool[:, j])
+                centered = raw - self.main_centers[j]      # current effective output
+                delta = centered.mean()
+                self.main_centers[j] += delta              # ACCUMULATE, don't overwrite
+                self._bias += delta
+              (accumulate-delta makes repeated calls idempotent; overwriting from raw
+               would double-count on the 2nd call.)
+        """
+        raise NotImplementedError
+
+    def center_interactions(self, X_pool: torch.Tensor) -> None:
+        """Fold each active interaction's CURRENT mean. Idempotent.
+        fold_bias=False  -> update inter_centers only, DO NOT touch _bias (used during
+                            the η-prune sweep so excluded pairs leave no orphan bias).
+        fold_bias=True   -> also add delta to _bias and mark _inter_folded[key]=True
+                            (call once after the survivor set is fixed, and at the end
+                            of each fine-tune).
+        TODO:
+            - eval() + no_grad.
+            - For each (j,k) in active_pairs():
+                key=f"{j},{k}"; cols = stack(X_pool[:,j], X_pool[:,k])
+                raw = interaction_nns[key](cols)
+                centered = raw - inter_centers[key]
+                delta = centered.mean()
+                inter_centers[key] += delta               # ACCUMULATE
+                if fold_bias: self._bias += delta; _inter_folded[key] = True
         """
         raise NotImplementedError
 
@@ -159,9 +209,12 @@ class NA2M(nn.Module):
             List of m tensors (m = number of active pairs), each (batch_size, 1). [] if none.
 
         TODO:
-            - For each (j, k) in active_pairs(): stack columns j and k → (batch_size, 2).
-            - Resolve the categorical-input handling flagged in InteractionNN.
-            - Run the matching InteractionNN.
+            - For each (j,k) in active_pairs(): cols = stack(x[:,j], x[:,k]);
+              out = interaction_nns[key](cols) - inter_centers.get(key, 0.0)
+              (DEFENSIVE .get default 0 — inter_outputs runs on every forward from the
+               moment a pair is added, before any centering.)
+            - Resolve categorical-input handling (see InteractionNN TODO) consistently
+              with how the subnet was built.
         """
         raise NotImplementedError
 
@@ -175,9 +228,9 @@ class NA2M(nn.Module):
             (term_id, fn) tuples.
 
         TODO:
-            - Yield (("main", j), fn_j) for each feature.
-            - Yield (("inter", j, k), fn_jk) for each active pair.
-            - Use the late-binding guard (j=j, k=k) in every closure over loop vars.
+            - main fn: raw_main(j, col) - main_centers[j]   (late-bind j=j)
+            - inter fn: raw_inter(key, cols) - inter_centers.get(key, 0.0)  (late-bind key=key)
+            - returned fns yield CENTERED outputs (used by extract/concurvity).
         """
         raise NotImplementedError
 
@@ -227,23 +280,12 @@ class NA2M(nn.Module):
     # ------------------------------------------------------------------
 
     def clarity_loss(self, x: torch.Tensor) -> torch.Tensor:
-        """GAMI-Net marginal-clarity penalty over active interaction pairs.
-
-        Penalises overlap between an interaction and its parent mains:
-            Σ_(j,k) ( |mean_i f_j(x_ij) · f_jk(x_ij, x_ik)|
-                    + |mean_i f_k(x_ik) · f_jk(x_ij, x_ik)| )
-
-        NOT YET WIRED into any training loop — Stage 3 wires this into
-        stage3_finetune. Correctness gap to fill there.
-
-        Args:
-            x: Input batch, shape (batch_size, num_features).
-
-        Returns:
-            Scalar penalty tensor.
-
+        """Σ_(j,k) (|mean f_j·f_jk| + |mean f_k·f_jk|) on CENTERED outputs.
         TODO:
-            - For each active (j, k): compute the marginal-clarity product terms.
-            - Confirm the exact GAMI-Net form against GamiNet-master before wiring.
+            - fj = main_nn_j(x[:,j]) - main_centers[j];  fk likewise for k.
+            - fjk = interaction_nns[key](cols) - inter_centers.get(key, 0.0).
+            - penalty += (fj*fjk).mean().abs() + (fk*fjk).mean().abs(), summed over pairs.
+            - Centering is REQUIRED here: the penalty is only an orthogonality measure
+              when both factors are zero-mean. Matches reference call() form.
         """
         raise NotImplementedError
