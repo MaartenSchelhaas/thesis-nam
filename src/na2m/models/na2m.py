@@ -3,7 +3,7 @@ NA2M — Neural Additive (×2) Model: mains + pairwise interactions.
 
 A GAMI-Net-style additive model with a type-aware main bank (FeatureNN for
 numericals, CategNet for integer-coded categoricals) plus dynamically added
-pairwise InteractionNN subnets:
+pairwise interaction subnets (FeatureNN with in_features=2, activation='relu'):
 
     y = b + Σ_j f_j(x_j) + Σ_(j,k) f_jk(x_j, x_k)
 
@@ -31,7 +31,6 @@ import torch.nn as nn
 
 from nam.models.feature_nn import FeatureNN
 from .categnet import CategNet
-from .interaction_nn import InteractionNN
 
 
 class NA2M(nn.Module):
@@ -91,14 +90,15 @@ class NA2M(nn.Module):
     # ------------------------------------------------------------------
 
     def add_interactions(self, pairs: list[tuple[int, int]]) -> None:
-        """Build one InteractionNN per pair into the ModuleDict. Idempotent.
+        """Build one interaction subnet per pair into the ModuleDict. Idempotent.
 
         Args:
             pairs: List of (j, k) feature-index pairs to add.
 
         TODO:
             - For each (j,k): key=f"{j},{k}"; skip if present.
-            - interaction_nns[key] = InteractionNN(inter_units, inter_hidden, inter_dropout).
+            - interaction_nns[key] = FeatureNN(inter_units, inter_hidden, inter_dropout,
+                                               activation='relu', in_features=2).
             - inter_centers[key] = torch.zeros(1, device=self._bias.device)
             - _inter_folded[key] = False
             - Caller MUST rebuild the optimizer.
