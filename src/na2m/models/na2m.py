@@ -29,7 +29,7 @@ reproduction baseline. This is a new, parallel model.
 import torch
 import torch.nn as nn
 
-from nam.models.feature_nn import FeatureNN
+from .feature_nn import FeatureNN
 from .categnet import CategNet
 
 

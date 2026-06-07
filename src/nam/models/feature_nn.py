@@ -28,6 +28,10 @@ class FeatureNN(nn.Module):
     Single-feature subnet: maps scalar input x_i → scalar output f_i(x_i).
     """
 
+    # TODO: add moving_mean tracking (needed for marginal clarity penalty, stage 3)
+    # See GamiNet-master NAMNet.call() — same pattern as CategNet, subnet_mean
+    # tracked during training and used in NA2M.clarity_loss().
+
     def __init__(
         self,
         num_units: int = 64,

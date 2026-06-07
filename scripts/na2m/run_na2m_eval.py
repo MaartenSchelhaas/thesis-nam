@@ -37,9 +37,9 @@ from nam.data.dataset import NAMDataset  # noqa: F401  (used once implemented)
 
 # NA2M building blocks
 from na2m.utils.config import load_na2m_config  # noqa: F401
-from na2m.data.data_utils_route2 import (  # noqa: F401
+from na2m.data.data_utils import (  # noqa: F401
     load_compas,
-    preprocess_route2,
+    preprocess,
     make_grid,
     density_weights,
 )

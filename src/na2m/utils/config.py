@@ -22,93 +22,136 @@ import yaml
 class NA2MConfig:
     dataset_path: str = ""
 
-    # --- Main bank architecture (FeatureNN for num, CategNet for cat) ---
+    # ------------------------------------------------------------------ #
+    # Shared subnet architecture                                           #
+    # (applies to both main-effect and interaction subnets)               #
+    # ------------------------------------------------------------------ #
+
     num_units: int = 64
-    # Width of the main FeatureNN activation layer.
+    # Width of the activation layer (ExU/LinReLU).
+    # Interaction subnets use Linear(2, num_units) as their input layer.
 
     hidden_sizes: list = field(default_factory=lambda: [64, 32])
-    # Hidden Dense widths after the activation layer in each main FeatureNN.
+    # Widths of hidden Dense layers after the activation layer.
+    # Empty list → shallow (activation layer + output only).
 
     activation: str = "exu"
-    # Main FeatureNN activation: 'exu' or 'relu'.
+    # Activation layer type: 'exu' or 'relu'.
 
     dropout: float = 0.5
-    # Dropout inside main subnets.
+    # Dropout probability after each hidden layer.
 
     feature_dropout: float = 0.0
-    # Probability of dropping an entire term (main or interaction) before summation.
+    # Probability of zeroing an entire term (main or interaction) before
+    # the additive summation in NA2M. 0.0 = disabled.
 
-    # --- Interaction subnet architecture (InteractionNN, 2-input ReLU MLP) ---
-    inter_units: int = 64
-    # Width of the first InteractionNN layer (Linear(2, inter_units)).
+    # ------------------------------------------------------------------ #
+    # Regularisation                                                       #
+    # ------------------------------------------------------------------ #
 
-    inter_hidden: list = field(default_factory=lambda: [64, 32])
-    # Hidden Dense widths after the first layer in each InteractionNN.
-
-    inter_dropout: float = 0.5
-    # Dropout inside interaction subnets.
-
-    # --- Regularisation ---
     output_regularization: float = 0.0
-    # Penalty on squared per-term outputs.
+    # Penalty on squared per-term outputs (mains + interactions).
 
     l2_regularization: float = 0.0
-    # L2 weight decay.
+    # L2 weight decay applied to all model parameters.
 
     clarity_regularization: float = 0.0
-    # Coefficient on the GAMI-Net marginal-clarity penalty (NA2M.clarity_loss),
-    # wired into stage3 fine-tuning. 0.0 = off.
+    # Coefficient λ on the GAMI-Net marginal-clarity penalty (stage 3).
+    # The penalty enforces E[g_ij(x_i, x_j) | x_i] ≈ 0 and
+    # E[g_ij(x_i, x_j) | x_j] ≈ 0, keeping interactions zero-mean in each
+    # marginal so they don't absorb main-effect signal.
+    # 0.0 = disabled (pure NAM behaviour, no interaction correction).
 
-    # --- Optimiser & schedule ---
+    # ------------------------------------------------------------------ #
+    # Optimiser & schedule                                                 #
+    # ------------------------------------------------------------------ #
+
     lr: float = 1e-3
+    # Initial Adam learning rate.
+
     decay_rate: float = 0.995
+    # Multiplicative LR decay per epoch (StepLR, gamma=decay_rate).
 
-    # --- Staged selection / pruning (stages 2–4) ---
-    top_m: int = 10
-    # Number of top FAST-ranked candidate pairs to add before pruning.
+    # ------------------------------------------------------------------ #
+    # Data split                                                           #
+    # ------------------------------------------------------------------ #
 
-    eta_prune: float = 0.0
-    # η threshold for the cumulative validation-loss sweep that prunes interactions.
+    val_frac: float = 0.15
+    test_frac: float = 0.15
+    seed: int = 42
 
-    block_train_epochs: int = 100
-    # Epochs for the interactions-only block-training step (mains frozen).
+    # ------------------------------------------------------------------ #
+    # Training loop                                                        #
+    # ------------------------------------------------------------------ #
 
-    finetune_epochs: int = 100
-    # Epochs per fine-tune pass (stage 3, and each stage-4 re-fine-tune).
-
-    concurvity_threshold: float = 0.5
-    # Stage 4 removes the worst pair while any concurvity exceeds this.
-
-    max_concurvity_iters: int = 10
-    # Cap on stage-4 remove-and-refit iterations.
-
-    # --- Training loop ---
     batch_size: int = 1024
     num_epochs: int = 1000
     patience: int = 60
-    val_check_interval: int = 10
+    # Early stopping patience (in epochs, checked every val_check_interval).
 
-    # --- Evaluation harness (k-fold × seed × arm) ---
+    val_check_interval: int = 10
+    # Validate every N epochs.
+
+    # ------------------------------------------------------------------ #
+    # Staged interaction selection & pruning (stages 2–4)                  #
+    # ------------------------------------------------------------------ #
+
+    top_m: int = 10
+    # Number of top FAST-ranked candidate pairs added before pruning.
+
+    eta_prune: float = 0.0
+    # Cumulative validation-loss threshold η for the stage-2 sweep that
+    # prunes weak interactions after block training.
+    # 0.0 = keep all top_m pairs (no sweep pruning).
+
+    block_train_epochs: int = 100
+    # Epochs for the interaction-only block-training step (stage 2,
+    # main-effect weights frozen).
+
+    finetune_epochs: int = 100
+    # Epochs for the joint fine-tuning pass (stage 3, and each stage-4
+    # re-fine-tune after a concurvity removal).
+
+    # ------------------------------------------------------------------ #
+    # Concurvity filter (stage 4)                                          #
+    # ------------------------------------------------------------------ #
+
+    concurvity_threshold: float = 0.5
+    # Remove the worst-offending interaction pair while any pairwise
+    # concurvity statistic exceeds this value.
+
+    max_concurvity_iters: int = 10
+    # Hard cap on remove-and-refit iterations.
+
+    # ------------------------------------------------------------------ #
+    # Evaluation harness                                                   #
+    # ------------------------------------------------------------------ #
+
     k_folds: int = 5
     fold_seed: int = 42
-    # Seed for the outer fold split (fixed; folds = data/accuracy variation).
+    # Seed for the outer k-fold split (fixed across runs → same folds).
 
     seeds: list = field(default_factory=lambda: [0, 1, 2, 3, 4])
-    # Per-fold replicate seeds (optimization/instability variation; bootstrap units).
+    # Per-fold replicate seeds (controls optimisation variance; one per fold).
 
     grid_size: int = 100
-    # G: number of grid points per numerical feature (for shape-curve extraction).
+    # G: number of grid points per numerical feature for shape-curve
+    # extraction and the FAST interaction-strength approximation.
 
-    # --- Task ---
+    # ------------------------------------------------------------------ #
+    # Task                                                                 #
+    # ------------------------------------------------------------------ #
+
     task: str = "classification"
-    # 'classification' → BCE + AUROC; 'regression' → MSE + RMSE.
+    # 'classification' → binary cross-entropy + AUROC
+    # 'regression'     → MSE + RMSE
 
 
 def load_na2m_config(path: str) -> NA2MConfig:
     """Load an NA2MConfig from a YAML file.
 
     Args:
-        path: Path to the YAML config.
+        path: Path to the YAML config file.
 
     Returns:
         Populated NA2MConfig instance.
@@ -121,8 +164,8 @@ def load_na2m_config(path: str) -> NA2MConfig:
 def load_na2m_search_config(path: str) -> tuple[dict, dict]:
     """Load a tuning config: fixed settings + an Optuna search space.
 
-    Mirrors nam.utils.config.load_search_config — the YAML carries a top-level
-    `search_space` block popped out from the fixed settings.
+    The YAML carries a top-level `search_space` block (same schema as
+    NAM's load_search_config) that is popped out from the fixed settings.
 
     Args:
         path: Path to the search YAML.

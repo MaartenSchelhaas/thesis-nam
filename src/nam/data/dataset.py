@@ -19,6 +19,7 @@ class NAMDataset(Dataset):
         y:       Target vector, shape (n_samples,). Binary 0/1 for classification.
         weights: Optional per-sample weights, shape (n_samples,).
                  Defaults to all-ones. Pass 0 for samples with missing labels.
+        feature_meta: Meta-data for NA2M with different categorical encoding
 
     Each __getitem__ returns:
         features : FloatTensor of shape (n_features,)
@@ -30,13 +31,15 @@ class NAMDataset(Dataset):
             self, 
             X: np.ndarray, 
             y: np.ndarray, 
-            weights: np.ndarray | None = None):
+            weights: np.ndarray | None = None,
+            feature_meta: list | None = None):
 
         if np.isnan(y).any():
             raise ValueError("y contains NaN values — run dropna() before creating NAMDataset")
         
         self.X = torch.tensor(X, dtype=torch.float32)
         self.y = torch.tensor(y, dtype=torch.float32)
+        self.feature_meta = feature_meta
 
         if weights is None:
             # Default: all ones — every sample is equally weighted.
