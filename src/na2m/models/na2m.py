@@ -31,6 +31,7 @@ reproduction baseline. This is a new, parallel model.
 
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader
 
 from .feature_nn import FeatureNN
 from .categnet import CategNet
@@ -110,12 +111,24 @@ class NA2M(nn.Module):
         self._inter_folded: dict[str, bool] = {}
 
 
-    # ------------------------------------------------------------------
-    # Structural mutation (rebuild the optimizer after ANY of these)
-    # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
     def _encode_col(self, x: torch.Tensor, j: int) -> torch.Tensor:
-        """One-hot encode column j if categorical, else return as (batch, 1)."""
+        """Encode column j into a float tensor suitable for subnet input.
+
+        Used at runtime (forward pass / raw_term_output) to feed columns into
+        FeatureNN. Must match the width that _inter_in_features promised at
+        construction time.
+
+        Args:
+            x: Full input batch, shape (batch, num_features).
+            j: Feature index to encode.
+
+        Returns:
+            (batch, 1) for numerical; (batch, n_levels) for categorical (one-hot).
+        """
         meta = self.feature_meta[j]
         if meta.type == "num":
             col = x[:, j:j+1]  # (batch, 1)
@@ -126,7 +139,18 @@ class NA2M(nn.Module):
         return col
 
     def _inter_in_features(self, j: int, k: int) -> int:
-        """Compute interaction subnet input width: 1 per num feature, n_levels per cat feature."""
+        """Compute interaction subnet input width at construction time.
+
+        Called by add_interactions to set FeatureNN's in_features correctly.
+        Must stay consistent with what _encode_col returns at runtime.
+
+        Args:
+            j: First feature index.
+            k: Second feature index.
+
+        Returns:
+            Total input width: 1 per numerical feature, n_levels per categorical.
+        """
         meta_j = self.feature_meta[j]
         meta_k = self.feature_meta[k]
 
@@ -143,6 +167,22 @@ class NA2M(nn.Module):
             contrib_k = meta_k.n_levels
 
         return contrib_j + contrib_k
+    
+    def active_interaction_pairs(self) -> list[tuple[int, int]]:
+        """Return active interaction pairs parsed from ModuleDict keys.
+
+        Returns:
+            List of (j, k) tuples; [] when no interactions are active.
+        """
+        pairs = []
+        for key in self.inter_nns:
+            j, k = key.split(",")
+            pairs.append((int(j), int(k)))
+        return pairs
+
+    # ------------------------------------------------------------------
+    # Structural mutation (rebuild the optimizer after ANY of these)
+    # ------------------------------------------------------------------
 
     def add_interactions(self, pairs: list[tuple[int, int]]) -> None:
         """Build one interaction subnet per pair into the ModuleDict. Idempotent.
@@ -193,7 +233,6 @@ class NA2M(nn.Module):
         self._inter_folded.pop(key, None)
 
 
-
     def set_main_trainable(self, flag: bool) -> None:
         """Freeze or unfreeze all main-bank parameters.
 
@@ -206,108 +245,116 @@ class NA2M(nn.Module):
         for subnet in self.main_nns:
             subnet.requires_grad_(flag)
 
-    def center_main_effects(self, X_pool: torch.Tensor) -> None:
-        """Fold each main subnet's CURRENT mean into _bias. Idempotent.
-        Call after Stage 1 AND at the end of the SINGLE Stage-3 fine-tune. Pure
-        reparameterisation — predictions unchanged.
-        TODO:
-            - eval() + no_grad throughout (restore train mode after if needed).
-            - For each j:
-                raw = main_nn_j(X_pool[:, j])
-                centered = raw - self.main_centers[j]      # current effective output
-                delta = centered.mean()
-                self.main_centers[j] += delta              # ACCUMULATE, don't overwrite
+    # ------------------------------------------------------------------
+    # Centering
+    # ------------------------------------------------------------------
+    def center_main_effects(self, pool_loader: DataLoader) -> None:
+        """Fold each main subnet's current mean into _bias.
+
+        Iterates over pool_loader in eval/no_grad mode, accumulates the sum of
+        each main subnet's effective output (raw - already-accumulated offset),
+        then divides by N to get the mean delta. That delta is added to
+        main_centers (so main_outputs subtracts it on future forward passes) and
+        to _bias (so predictions remain unchanged). 
+
+        Call after Stage 1 AND after the single Stage-3 fine-tune.
+
+        Args:
+            pool_loader: DataLoader over the full training pool (X, y, idx).
+                         Yields batches of (X_batch, _, _).
+        """
+        was_training = self.training
+        self.eval()  # disable dropout — we want deterministic outputs
+        with torch.no_grad():
+            # accum[j] will hold the sum of subnet j's outputs across all N samples
+            accum = torch.zeros(self.num_features)
+            n = 0  # total sample count across all batches
+
+            for X_batch, _, _ in pool_loader:
+                for j in range(self.num_features):
+                    # raw output of subnet j for this batch, shape (batch, 1)
+                    raw = self.main_nns[j](X_batch[:, j:j+1])
+
+                    # subtract any offset already accumulated from previous centering calls;
+                    # this is what main_outputs subtracts during forward, so this reflects
+                    # what the model currently contributes — with previous centering accounted for
+                    output_with_previous_centering = raw - self.main_centers[j]
+
+                    accum[j] += output_with_previous_centering.sum()
+                n += X_batch.shape[0]
+
+            for j in range(self.num_features):
+                # mean output of subnet j over the full pool
+                delta = accum[j] / n
+
+                # tell main_outputs to subtract this going forward
+                self.main_centers[j] += delta
+
+                # compensate in the global bias so predictions don't change
                 self._bias += delta
-              (accumulate-delta makes repeated calls idempotent; overwriting from raw
-               would double-count on the 2nd call.)
-        """
-        raise NotImplementedError
 
-    def center_interactions(self, X_pool: torch.Tensor, fold_bias: bool) -> None:
-        """Fold each active interaction's CURRENT mean. Idempotent.
-        fold_bias=False  -> update inter_centers only, DO NOT touch _bias. Used
-                            DURING the Stage-2 prune sweep: offsets are held
-                            per-term so candidates that end up skipped/excluded
-                            never contaminate _bias or the validation loss.
-        fold_bias=True   -> also add delta to _bias and mark _inter_folded[key]=True.
-                            Call ONCE after the survivor set is fixed, and again at
-                            the end of the SINGLE Stage-3 fine-tune.
-        TODO:
-            - eval() + no_grad.
-            - For each (j,k) in active_pairs():
-                key=f"{j},{k}"; cols = stack(X_pool[:,j], X_pool[:,k])
-                raw = interaction_nns[key](cols)
-                centered = raw - inter_centers[key]
-                delta = centered.mean()
-                inter_centers[key] += delta               # ACCUMULATE
-                if fold_bias: self._bias += delta; _inter_folded[key] = True
-        """
-        raise NotImplementedError
+        if was_training:
+            self.train()
 
-    def active_pairs(self) -> list[tuple[int, int]]:
-        """Return active interaction pairs parsed from ModuleDict keys.
+    def center_interactions(self, pool_loader: DataLoader, fold_bias: bool) -> None:
+        """Fold each active interaction subnet's current mean into its centering offset.
 
-        Returns:
-            List of (j, k) tuples; [] when no interactions are active.
+        Same accumulate-then-apply pattern as center_main_effects, but per interaction pair.
+        fold_bias controls whether the delta is also folded into _bias:
+            False — update inter_centers only; used DURING the Stage-2 sweep so that
+                    candidates that get skipped/cut never contaminate _bias.
+            True  — also add delta to _bias and mark _inter_folded[key]=True; used ONCE
+                    after the survivor set is fixed and after Stage-3 fine-tune.
+
+        Args:
+            pool_loader: DataLoader over the full training pool. Yields (X_batch, _, _).
+            fold_bias: Whether to fold the delta into _bias (see above).
         """
-        pairs = []
-        for key in self.inter_nns:
-            j, k = key.split(",")
-            pairs.append((int(j), int(k)))
-        return pairs
+        was_training = self.training
+        self.eval()  # disable dropout
+        with torch.no_grad():
+            pairs = self.active_interaction_pairs()
+
+            # one accumulator per active pair, keyed by "j,k"
+            accum = {f"{j},{k}": torch.zeros(1) for j, k in pairs}
+            n = 0
+
+            for X_batch, _, _ in pool_loader:
+                for j, k in pairs:
+                    key = f"{j},{k}"
+
+                    # concatenate the two encoded columns to form the subnet input
+                    col_j = self._encode_col(X_batch, j)
+                    col_k = self._encode_col(X_batch, k)
+                    feature_input = torch.cat([col_j, col_k], dim=1)
+
+                    # raw subnet output for this batch
+                    raw = self.inter_nns[key](feature_input)
+
+                    # subtract previous centering offset — same idempotent trick as mains
+                    output_with_previous_centering = raw - self.inter_centers.get(key, 0.0)
+
+                    accum[key] += output_with_previous_centering.sum()
+                n += X_batch.shape[0]
+
+            for j, k in pairs:
+                key = f"{j},{k}"
+                delta = accum[key] / n
+
+                # accumulate into the per-term offset (subtracted in inter_outputs)
+                self.inter_centers[key] = self.inter_centers.get(key, 0.0) + delta
+
+                if fold_bias:
+                    # compensate in global bias so predictions don't change
+                    self._bias += delta
+                    self._inter_folded[key] = True
+
+        if was_training:
+            self.train()
 
     # ------------------------------------------------------------------
     # Per-term evaluation
     # ------------------------------------------------------------------
-
-    def main_outputs(self, x: torch.Tensor) -> list[torch.Tensor]:
-        """Pass each feature column through its main subnet and subtract the accumulated centering offset.
-
-        Args:
-            x (torch.Tensor): Input tensor of shape (batch_size, num_features).
-
-        Returns:
-            list[torch.Tensor]: List of num_features tensors, each of shape (batch_size, 1),
-                                representing the centered contribution f_i(x_i) - main_centers[i].
-        """
-
-        individual_outputs = []
-        for i in range(self.num_features):
-            feature_input = x[:,i].unsqueeze(-1)
-            feature_output = self.main_nns[i](feature_input) - self.main_centers[i]
-            individual_outputs.append(feature_output)
-        return individual_outputs
-
-
-    def inter_outputs(self, x: torch.Tensor) -> list[torch.Tensor]:
-        """Evaluate every active interaction term, in active_pairs() order.
-
-        Args:
-            x: Input batch, shape (batch_size, num_features).
-
-        Returns:
-            List of m tensors (m = number of active pairs), each (batch_size, 1). [] if none.
-
-        TODO:
-            - For each (j,k) in active_pairs(): cols = stack(x[:,j], x[:,k]);
-              out = interaction_nns[key](cols) - inter_centers.get(key, 0.0)
-              (DEFENSIVE .get default 0 — inter_outputs runs on every forward from the
-               moment a pair is added, before any centering.)
-            - Resolve categorical-input handling (see InteractionNN TODO) consistently
-              with how the subnet was built.
-        """
-        individual_outputs = []
-        for j,k in self.active_pairs():
-            key = f"{j,k}"
-
-            #feature_input = 
-
-            #feature_input = self._encode_col(x[:,i].unsqueeze(-1),i)
-
-
-
-        raise NotImplementedError
-
     def iter_terms(self):
         """Yield (term_id, fn) for every term: mains first, then active interactions.
 
@@ -357,57 +404,101 @@ class NA2M(nn.Module):
         raise NotImplementedError
 
     # ------------------------------------------------------------------
-    # Prediction / forward
+    # Forward
     # ------------------------------------------------------------------
 
-    def predict(self, x: torch.Tensor) -> torch.Tensor:
-        """Return only the scalar prediction (forward(x)[0]).
+    def main_outputs(self, x: torch.Tensor) -> list[torch.Tensor]:
+        """Pass each feature column through its main subnet and subtract the accumulated centering offset.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch_size, num_features).
+
+        Returns:
+            list[torch.Tensor]: List of num_features tensors, each of shape (batch_size, 1),
+                                representing the centered contribution f_i(x_i) - main_centers[i].
+        """
+
+        individual_outputs = []
+        for i in range(self.num_features):
+            feature_input = x[:,i].unsqueeze(-1)
+            feature_output = self.main_nns[i](feature_input) - self.main_centers[i]
+            individual_outputs.append(feature_output)
+        return individual_outputs
+
+    def inter_outputs(self, x: torch.Tensor) -> list[torch.Tensor]:
+        """Evaluate every active interaction term, in active_pairs() order.
 
         Args:
             x: Input batch, shape (batch_size, num_features).
 
         Returns:
-            Predictions, shape (batch_size,).
+            List of m tensors (m = number of active pairs), each (batch_size, 1). [] if none.
 
-        TODO:
-            - return self.forward(x)[0].
         """
-        raise NotImplementedError
+        individual_outputs = []
+        for j,k in self.active_interaction_pairs():
+            key = f"{j},{k}"
+            col_j = self._encode_col(x, j)   # (batch, 1) or (batch, n_levels_j)
+            col_k = self._encode_col(x, k)   # (batch, 1) or (batch, n_levels_k)
+
+            feature_input = torch.cat([col_j, col_k], dim=1)   # (batch, 1+1) or wider for cats
+            feature_output = self.inter_nns[key](feature_input) - self.inter_centers.get(key, 0.0) 
+            individual_outputs.append(feature_output)
+        return individual_outputs
 
     def forward(self, x: torch.Tensor):
-        """Forward pass: sum all term outputs + bias, with feature dropout.
-
-        terms = main_outputs + inter_outputs; concat to (batch_size, K+m);
-        feature dropout; sum over terms; + bias.
-
-        The INTERACTIONS-OFF path (no pairs added) MUST be identical to a
-        mains-only NAM forward — same dropout/sum/bias behavior. This is arm A.
+        """Forward pass: sum all term outputs, main and interaction terms + bias, with feature dropout.
 
         Args:
             x: Input batch, shape (batch_size, num_features).
 
         Returns:
-            (out, dropped_terms): out shape (batch_size,); dropped_terms the
+            (out, dropout_out): out shape (batch_size,); dropout_out the
             per-term tensor after feature dropout (for the output penalty).
 
-        TODO:
-            - terms = self.main_outputs(x) + self.inter_outputs(x).
-            - concat → dropout_layer → sum over dim=-1 → + self._bias.
-            - assert/comment: with no active pairs this equals the mains-only forward.
         """
-        raise NotImplementedError
+        individual_outputs = self.main_outputs(x) + self.inter_outputs(x)  # list of (batch, 1); inter part is [] for arm A
+
+        conc_out = torch.cat(individual_outputs, dim=1)
+        dropout_out = self.dropout_layer(conc_out) 
+
+        out = dropout_out.sum(dim=1) + self._bias
+        return out, dropout_out
+
 
     # ------------------------------------------------------------------
     # GAMI-Net marginal-clarity penalty (NOT YET wired — Stage 3 gap)
     # ------------------------------------------------------------------
 
     def clarity_loss(self, x: torch.Tensor) -> torch.Tensor:
-        """Σ_(j,k) (|mean f_j·f_jk| + |mean f_k·f_jk|) on CENTERED outputs.
-        TODO:
-            - fj = main_nn_j(x[:,j]) - main_centers[j];  fk likewise for k.
-            - fjk = interaction_nns[key](cols) - inter_centers.get(key, 0.0).
-            - penalty += (fj*fjk).mean().abs() + (fk*fjk).mean().abs(), summed over pairs.
-            - Centering is REQUIRED here: the penalty is only an orthogonality measure
-              when both factors are zero-mean. Matches reference call() form.
+        """Marginal-clarity penalty: Σ_(j,k) (|mean f_j·f_jk| + |mean f_k·f_jk|).
+
+        Penalises covariance between each interaction subnet and the two main effect
+        subnets it is built from. Centering is required — mean(f·g) is only a
+        covariance when both terms are zero-mean. Returns 0 when no interactions
+        are active (arm A / Stage 1).
+
+        Args:
+            x: Input batch, shape (batch_size, num_features).
+
+        Returns:
+            Scalar penalty tensor.
         """
-        raise NotImplementedError
+        penalty = torch.zeros(1, device=self._bias.device)
+
+        for j, k in self.active_interaction_pairs():
+            key = f"{j},{k}"
+
+            # centered main outputs for both features in this pair
+            f_j = self.main_nns[j](x[:, j:j+1]) - self.main_centers[j]
+            f_k = self.main_nns[k](x[:, k:k+1]) - self.main_centers[k]
+
+            # centered interaction output
+            col_j = self._encode_col(x, j)
+            col_k = self._encode_col(x, k)
+            f_jk = self.inter_nns[key](torch.cat([col_j, col_k], dim=1)) - self.inter_centers.get(key, 0.0)
+
+            # empirical covariance between the interaction and each main effect
+            penalty = penalty + (f_j * f_jk).mean().abs() + (f_k * f_jk).mean().abs()
+
+        return penalty
