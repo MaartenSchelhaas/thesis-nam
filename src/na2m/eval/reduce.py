@@ -15,10 +15,18 @@ HARD CONSTRAINTS:
     - No density weighting: stability is averaged over actual test datapoints, so
       data density is intrinsic to the sample.
     - Concurvity regressors are ALL OTHER fitted components (mains + other active
-      interactions, self excluded) — matches the stage-4 pruning criterion exactly.
+      interactions, self excluded) — SAME formula as the Stage-2 selection gate,
+      via the shared helper na2m.utils.concurvity. Here it is a POST-HOC
+      measurement on the fine-tuned (deployed) model, so for arm C it is NOT
+      guaranteed ≤ threshold (fine-tuning moves the geometry).
     - main_effect_instability is the CLEAN headline (mains only, shared across
       arms). interaction_instability is reported separately and carries an
       identifiability caveat (see its docstring).
+    - Arms are {A, B, C}. There is NO B′ arm (the count-matched control was
+      dropped: with the in-sweep concurvity gate, C is no longer a subset of B, so
+      truncating B to C's count no longer isolates a clean comparison). If a
+      count-matched contrast is ever wanted it can be reconstructed post-hoc here
+      from B's stored term_vectors by B's own contribution ranking — no retraining.
 """
 
 
@@ -36,10 +44,10 @@ def main_effect_instability(measures, arm: str) -> float:
 
     Args:
         measures: Stored measures keyed by (arm, fold, seed).
-        arm: Arm to compute for ('A', 'B', 'C', or 'Bprime').
+        arm: Arm to compute for ('A', 'B', or 'C').
 
     Returns:
-        Scalar instability (lower = more stable). Compare C vs B and C vs B′.
+        Scalar instability (lower = more stable). Headline comparison: C vs B.
 
     TODO:
         - Read term_vectors_test (NOT pool). For each ("main", k):
@@ -72,7 +80,7 @@ def interaction_instability(measures, arm: str) -> float:
 
     Args:
         measures: Stored measures keyed by (arm, fold, seed).
-        arm: Arm to compute for ('B', 'C', 'Bprime'). Skip 'A' (no interactions).
+        arm: Arm to compute for ('B' or 'C'). Skip 'A' (no interactions).
 
     Returns:
         Scalar instability over interaction terms (lower = more stable).
@@ -93,7 +101,7 @@ def bootstrap_gap(measures, arm_c: str, arm_baseline: str, n_boot: int = 2000, *
     Args:
         measures: Stored measures keyed by (arm, fold, seed).
         arm_c: The treatment arm ('C').
-        arm_baseline: The baseline arm ('B' or 'Bprime').
+        arm_baseline: The baseline arm ('B').
         n_boot: Number of bootstrap replicates.
         metric: Which instability function to bootstrap (default: the main-effect
             headline). Pass interaction_instability to bootstrap that gap instead.
@@ -114,47 +122,56 @@ def concurvity_summary(measures, arm: str) -> dict:
 
     Per interaction term (j,k): adj-R²(term_vec ~ all OTHER fitted components)
     on the 80% POOL (term_vectors_pool), where "all other" = every main effect +
-    every other active interaction (self excluded). Matches eq. (concurvity-filter)
-    and the stage-4 pruning criterion exactly. Report max & mean over active
-    pairs, averaged over seeds & folds. Skip arm A (no interactions).
+    every other active interaction (self excluded). This is the HEADLINE
+    concurvity number and uses the SAME formula as the Stage-2 selection gate, via
+    the shared helper na2m.utils.concurvity — but measured POST-HOC on the
+    fine-tuned model. For arm C it is therefore NOT guaranteed ≤ τ: the gate acts
+    at selection time, and the single Stage-3 fine-tune moves the geometry
+    afterward. Report max & mean over active pairs, averaged over seeds & folds.
+    Skip arm A (no interactions).
 
     Pool, not test fold: the observed-concurvity index of Kovács is a property of
     the fit on the training data, so it is measured where the model was fit.
 
     Args:
         measures: Stored measures keyed by (arm, fold, seed).
-        arm: Arm to compute for ('B', 'C', 'Bprime').
+        arm: Arm to compute for ('B' or 'C').
 
     Returns:
         dict with at least {"max": ..., "mean": ...}.
 
     TODO:
         - Read term_vectors_pool (NOT test). For each interaction (j,k):
-          regressors = all main term vectors + all other active interaction
-          vectors (exclude (j,k) itself).
-        - adj-R² fitted WITH an intercept (equivalent to pre-centering);
-          p = K + (n_active_pairs - 1), recomputed each time (pairs differ
-          across seeds/folds).
+          call na2m.utils.concurvity.concurvity_score(("inter", j, k),
+          {all main vectors + all active interaction vectors}) — the helper
+          excludes self and fits adj-R² WITH an intercept (p = K + n_active - 1,
+          recomputed since pairs vary across seeds/folds). Do NOT reimplement the
+          formula here — it must stay identical to the gate.
         - Aggregate max & mean over pairs, then average over seeds & folds.
     """
     raise NotImplementedError
 
 
 def accuracy_summary(measures) -> dict:
-    """Single-model and ensemble accuracy per arm, plus fine-tune pass counts.
+    """Single-model & ensemble accuracy per arm, plus retained-term count.
+
+    Provides the two coordinates each arm plots as in (n_terms, accuracy) space:
+    test-fold accuracy and the number of retained interaction terms.
 
     Args:
         measures: Stored measures keyed by (arm, fold, seed), including logits,
-            test labels, and fine_tune_pass_count.
+            test labels, and `pairs` (the active interaction set per run).
 
     Returns:
-        dict per arm with single-model accuracy (mean over seeds, then folds),
-        an ensemble reference (mean logits over seeds), and fine_tune_pass_count.
+        dict per arm with single-model accuracy (mean over seeds, then folds), an
+        ensemble reference (mean logits over seeds), and n_terms = len(pairs)
+        (mean over seeds, then folds — arm A is always 0).
 
     TODO:
         - Single-model: metric per (fold, seed) from logits + test labels;
           mean over seeds, then folds.
         - Ensemble: average logits over seeds within a fold, then metric.
-        - Report fine_tune_pass_count per arm (for non-inferiority context).
+        - n_terms per (fold, seed) = len(measures[...]["pairs"]); mean over seeds,
+          then folds. (fine_tune_pass_count is GONE — it is always 1 now.)
     """
     raise NotImplementedError

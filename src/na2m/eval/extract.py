@@ -47,20 +47,21 @@ def extract_measures(model, X_pool, X_test, grids, feature_meta, *, include_inte
 
     TODO:
         - assert model.training is False; (document) best weights already restored.
+        - Term set = [("main", j) for j in range(num_features)] + active_pairs().
         - Under torch.no_grad():
-            * curves (plotting): evaluate each main term on its grid via iter_terms
-              (and interaction terms only if include_inter_curves).
-            * term_vectors_pool: evaluate every term (iter_terms) on X_pool, store RAW.
-            * term_vectors_test: evaluate every term (iter_terms) on X_test, store RAW.
-              SAME term set and SAME term_id keys as the pool dict — both cover all
-              mains + all active interactions, so concurvity and stability index the
-              same terms.
+            * curves (plotting): evaluate each main term on its grid (interaction
+              curves only if include_inter_curves). Plotting may use the centered
+              iter_terms path — curves are not fed to a metric.
+            * term_vectors_pool: model.raw_term_output(tid, X_pool) for every term,
+              store RAW. For CONCURVITY.
+            * term_vectors_test: model.raw_term_output(tid, X_test) for every term,
+              store RAW. For STABILITY. SAME term_id keys as the pool dict.
             * logits: model.predict(X_test).
             * pairs: model.active_pairs().
-        - iter_terms returns CENTERED outputs; store the RAW per-term values instead
-          (raw_main / raw_inter, before the center subtraction) so the reducer can
-          re-center per metric over the correct evaluation set. Do NOT store the
-          model's deployment centering here.
+        - Store RAW (uncentered) outputs via raw_term_output — NOT the centered
+          iter_terms values and NOT the model's deployment centering — so the
+          reducer can re-center per metric over the correct evaluation set
+          (test-fold mean for stability, OLS intercept for concurvity).
         - Key all dicts by term_id; convert tensors to numpy for persistence.
     """
     raise NotImplementedError

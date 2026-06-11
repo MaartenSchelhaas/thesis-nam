@@ -6,25 +6,35 @@ mutating a dynamic NA2M model in place. Staging lives here — there is NO
 separate TrainerNA2M; each stage builds/rebuilds a Trainer over the right
 parameter subset.
 
-Stages:
-    1. stage1_main      — train the main bank.
-    2. stage2_select    — FAST screen → top-M → add interactions → block-train
-                          (mains frozen) → η-prune by validation sweep.
-    3. stage3_finetune  — unfreeze → fine-tune all params with the marginal-clarity
-                          penalty wired in.
-    4. stage4_concurvity— (filter arm only) iteratively remove the worst concurve
-                          pair on the 80% pool until all ≤ 0.5; count passes.
+Stages (THREE — the old Stage-4 iterative concurvity removal is GONE):
+    1. stage1_main    — train the main bank; center.
+    2. stage2_select  — FAST screen → top-M → add interactions → block-train all
+                        of them jointly (mains frozen) → ONE forward prune sweep
+                        applying two gates in a single pass:
+                          (a) concurvity gate  [arm C only]  — skip a candidate
+                              whose block-trained output is too redundant with
+                              the mains + already-ACCEPTED interactions;
+                          (b) predictive-contribution gate — min-max cut on the
+                              accepted candidates' validation-loss sequence.
+    3. stage3_finetune — unfreeze → fine-tune all params ONCE with the
+                        marginal-clarity penalty → re-center.
 
-Arm mapping:
-    Arm A → with_interactions=False                  → stage1 only.
-    Arm B → with_interactions=True,  filter=False    → stages 1–3 (one fine-tune).
-    Arm C → with_interactions=True,  filter=True     → stages 1–4.
+Arm mapping (the ONLY differences are the two flags):
+    Arm A → with_interactions=False                       → stage1 only.
+    Arm B → with_interactions=True,  filter=False         → stages 1–3, gate OFF.
+    Arm C → with_interactions=True,  filter=True          → stages 1–3, gate ON.
+B and C run an IDENTICAL pipeline; arm C merely fires the concurvity gate inside
+the Stage-2 sweep. Both fine-tune EXACTLY ONCE.
 
 HARD CONSTRAINTS honoured here:
     - Rebuild the optimizer (new Trainer / params) after EVERY structural change.
     - Restore best weights (trainer.load_best) before returning / extracting.
-    - Concurvity is computed on the FINAL fine-tuned subnets over the 80% pool.
-    - B′ is NOT trained here — it is derived later by the harness from B and C.
+    - SPLIT CONTRACT: the internal pool train/val split is keyed off `fold`
+      (hp.fold_seed), NEVER off `seed`. `seed` controls init + optimization only.
+      Do not reseed the split per replicate — the stability metric depends on the
+      data being identical across seeds of a fold.
+    - NO per-removal re-fine-tune exists anywhere. The model fine-tunes once
+      (Stage 3) for both arms. (See the removed-stage flag at the bottom.)
 """
 
 
@@ -35,6 +45,7 @@ def fit_na2m(
     hp,
     seed,
     *,
+    fold: int,
     with_interactions: bool,
     with_concurvity_filter: bool,
 ) -> dict:
@@ -45,142 +56,156 @@ def fit_na2m(
         X_pool: The fold's 80% train pool features.
         y_pool: The fold's 80% train pool targets.
         hp: Hyperparameters for this fold (model + training settings).
-        seed: Reproducibility seed for this replicate (init + optimization).
+        seed: Reproducibility seed for this replicate (init + optimization ONLY).
+        fold: Fold index — keys the internal train/val split (see split contract).
         with_interactions: If False → arm A (stage1 only).
-        with_concurvity_filter: If True → run stage4 (arm C).
+        with_concurvity_filter: If True → arm C (concurvity gate ON in stage 2);
+            if False → arm B. Has NO effect when with_interactions is False.
 
     Returns:
-        dict with at least:
+        dict with:
             "model": the trained NA2M (best weights restored, eval mode),
-            "active_pairs": model.active_pairs(),
-            "fine_tune_pass_count": int (1 for B, ≥1 for C, 0/NA for A).
+            "active_pairs": model.active_pairs()  (the final S2 selection set —
+                consumed per-seed by the Jaccard / common-interaction eval).
 
     TODO:
-        - Seed RNGs from `seed`.
-        - Internal train/val split of the 80% pool (for early stopping & η-prune).
-        - stage1_main(...).
-        - If not with_interactions: restore best, return arm-A result.
-        - stage2_select(...) → stage3_finetune(...).
-        - If with_concurvity_filter: stage4_concurvity(...).
+        - Seed init+optimization RNGs from `seed` (NOT the data split).
+        - Internal train/val split of the 80% pool keyed off `fold`/hp.fold_seed
+          (deterministic across seeds): build pool_train / pool_val loaders.
+        - stage1_main(model, train_loader, val_loader, X_pool, hp).
+        - If not with_interactions: restore best, eval(), return arm-A result
+          (active_pairs == []).
+        - stage2_select(..., with_concurvity_filter=with_concurvity_filter).
+        - stage3_finetune(...)   # the SINGLE fine-tune, both arms.
         - Restore best weights, set eval(), assemble and return the result dict.
+        - NOTE: no fine_tune_pass_count is returned — it is always 1 now and thus
+          uninformative; the eval reads term count from active_pairs() instead.
     """
     raise NotImplementedError
 
 
-def stage1_main(model, train_loader, val_loader, hp) -> None:
-    """Train the main bank (Trainer over main params), restore best. Center
+def stage1_main(model, train_loader, val_loader, X_pool, hp) -> None:
+    """Train the main bank (Trainer over main params), restore best, then center.
 
     Args:
         model: NA2M instance.
-        train_loader: Internal training split loader.
-        val_loader: Internal validation split loader.
+        train_loader: Internal training split loader (fold-keyed).
+        val_loader: Internal validation split loader (fold-keyed).
+        X_pool: 80% pool features — the reference sample for centering.
         hp: Hyperparameters.
         # stage-1 Trainer: clarity_lambda defaults to 0.0 (no interactions exist yet).
 
     TODO:
-        - Trainer over model.parameters() (only mains exist); train; load_best.
-        - Freeze _bias during this stage is NOT needed (mains-only, bias trains fine).
-        - model.center_main_effects(X_pool)   # fold per-subnet mean into _bias.
+        - Trainer over model.parameters() (only mains + bias exist); train; load_best.
+        - _bias trains fine here (mains-only); no need to freeze it.
+        - model.center_main_effects(X_pool)   # fold per-subnet pool mean into _bias.
     """
     raise NotImplementedError
 
 
-def stage2_select(model, train_loader, val_loader, X_pool, y_pool, hp) -> None:
-    """FAST screen → top-M → add interactions → block-train → η-prune.
+def stage2_select(model, train_loader, val_loader, X_pool, y_pool, hp, *, with_concurvity_filter: bool) -> None:
+    """FAST screen → block-train top-M → ONE forward prune sweep (two gates).
+
+    The sweep is a SINGLE pass in decreasing contribution order; it NEVER retrains
+    and NEVER re-fine-tunes. Arm B and arm C run identical code here except that
+    the concurvity gate only fires when with_concurvity_filter is True.
 
     Args:
-        model: NA2M instance (mains trained).
-        train_loader: Internal training split loader.
-        val_loader: Internal validation split loader.
-        X_pool: 80% pool features (for the FAST residual screen).
+        model: NA2M instance (mains trained + centered).
+        train_loader: Internal training split loader (fold-keyed).
+        val_loader: Internal validation split loader (fold-keyed).
+        X_pool: 80% pool features (FAST screen + concurvity basis + centering).
         y_pool: 80% pool targets.
-        hp: Hyperparameters (M, η, block-train epochs).
+        hp: Hyperparameters (top_m, eta_prune, concurvity_threshold, block-train epochs).
+        with_concurvity_filter: gate switch (arm C True, arm B False).
 
-        # Fine-tune Trainer: clarity ON, same coefficient as stage 2.
-        # clarity_lambda=hp.clarity_lambda
-
+        # Block-train Trainer: clarity ON, SAME coefficient as stage 3
+        # (hp.clarity_regularization).
 
     TODO:
-        - FAST: fast_screen(main_model=model, X, y, task) -> ranked (j,k); top_M.
-        - add_interactions(top_M); set_main_trainable(False); ALSO freeze _bias for
-          block-train (it's about to be re-centered; let it not absorb signal);
-          REBUILD optimizer over interaction params only; block-train; load_best.
-        - add_interactions(top_M); set_main_trainable(False); ALSO freeze _bias for
-          block-train; REBUILD optimizer over interaction params only.
-        - Block-train with loss = task_loss + hp.clarity_lambda * model.clarity_loss(x),
-          SAME coefficient as stage 3 (matches GAMI-Net train_interaction). The penalty
-          acts on the frozen-mean parents and the training interaction: it shapes f_jk
-          toward orthogonality with its parents even at selection time. load_best.
-        - NOTE: parents are centered (end of stage 1) but interactions are NOT yet
-          centered here, so the f_jk factor carries a nonzero mean and the penalty is
-          slightly approximate at this point; this matches the reference, which centers
-          interactions only after block-training (center_interactions below).
-        - center_interactions(X_pool, fold_bias=False)   # per-term zero-mean, bias untouched.
-        - Contribution ranking = VARIANCE of each centered interaction output vector
-          on the TRAIN split (GAMI-Net moving_norm with w_i=1), descending.
-        - η-prune sweep on VAL, cumulative adds in ranking order, EVAL ONLY (no retrain):
-            losses=[l_0..l_M]; lo=min; rng=max-min;
-            if rng>0 and any((losses-lo)/rng < hp.loss_threshold):
-                k = first such index           # min-max-normalized rule (NOT (1+η)min)
-            else: k = argmin(losses)
-            survivors = ranking[:k]            # CHECK off-by-one vs reference prune
-        - remove_interaction for the dropped pairs (nothing folded yet → clean delete);
-          REBUILD optimizer.
-        - center_interactions(X_pool, fold_bias=True)     # fold survivors once.
+        - FAST: fast_screen(main_model=model, X, y, task) -> ranked (j,k); take top_m.
+        - add_interactions(top_m); set_main_trainable(False); ALSO freeze _bias for
+          block-train (it is about to be re-centered; do not let it absorb signal);
+          REBUILD optimizer over interaction params only.
+        - Block-train ALL top_m subnets JOINTLY, once, with
+          loss = task_loss + hp.clarity_regularization * model.clarity_loss(x)
+          (same coefficient as stage 3, matches GAMI-Net train_interaction). load_best.
+        - center_interactions(X_pool, fold_bias=False)   # per-term offsets HELD,
+          _bias untouched, so any candidate later skipped/excluded leaves no orphan
+          bias and cannot contaminate the sweep's validation loss.
+        - Contribution ranking = VARIANCE of each centered block-trained interaction
+          output vector on the TRAIN split (GAMI-Net moving_norm, w_i=1), descending.
+
+        --- SINGLE FORWARD PRUNE SWEEP (eval only, no retrain) ---
+        - accepted = []        # ordered list of (j,k) that passed the gate(s)
+        - val_losses = []      # val loss AFTER accepting each candidate
+        - For cand in ranking (decreasing contribution):
+            * CONCURVITY GATE (only if with_concurvity_filter):
+                basis = raw vectors on X_pool of {all mains} + {accepted interactions}
+                        (the CURRENTLY accepted set — grows as the sweep proceeds,
+                         NOT the full candidate set).
+                score = concurvity_adjr2(cand_raw_vec_pool, basis)   # shared helper
+                if score > hp.concurvity_threshold:
+                    continue   # SKIP — never reconsidered, not added to `accepted`.
+            * accepted.append(cand)
+            * val_losses.append( val loss of {mains + accepted} on val_loader )
+                # Compute from summed CENTERED per-term outputs + _bias, NOT a full
+                # forward(): non-accepted top_m subnets are still present but must
+                # contribute nothing to this measurement.
+        - PREDICTIVE-CONTRIBUTION GATE (after the sweep, on the accepted prefix):
+            losses = val_losses; lo = min(losses); rng = max(losses) - lo
+            if rng > 0 and any((losses - lo)/rng <= hp.eta_prune):
+                cut = first index with (losses[i]-lo)/rng <= hp.eta_prune
+            else:
+                cut = argmin(losses)              # degenerate-range fallback
+            survivors = accepted[: cut + 1]        # CHECK off-by-one vs reference prune
+
+        - DROP every top_m pair NOT in `survivors` (both concurvity-skipped and
+          predictive-cut): remove_interaction each (nothing folded yet → clean
+          delete); REBUILD optimizer.
+        - center_interactions(X_pool, fold_bias=True)   # fold survivors ONCE now
+          that the surviving set is fixed.
         - unfreeze _bias (stage 3 trains it).
     """
     raise NotImplementedError
 
 
-def stage3_finetune(model, train_loader, val_loader, hp) -> None:
-    """Unfreeze all params; fine-tune with the marginal-clarity penalty; recenter.
+def stage3_finetune(model, train_loader, val_loader, X_pool, hp) -> None:
+    """Unfreeze all params; fine-tune ONCE with the clarity penalty; recenter.
+
+    This is the model's ONLY fine-tune, for both arm B and arm C. There is no
+    re-fine-tune anywhere downstream.
 
     Args:
-        model: NA2M instance (interactions selected & pruned).
-        train_loader: Internal training split loader.
-        val_loader: Internal validation split loader.
-        hp: Hyperparameters (clarity-penalty coefficient, fine-tune epochs).
-
-        # Block-train Trainer: clarity ON, same coefficient as stage 3.
-        # clarity_lambda=hp.clarity_lambda
-
+        model: NA2M instance (interactions selected & pruned, survivors folded).
+        train_loader: Internal training split loader (fold-keyed).
+        val_loader: Internal validation split loader (fold-keyed).
+        X_pool: 80% pool features — the reference sample for re-centering.
+        hp: Hyperparameters (clarity coefficient, fine-tune epochs).
 
     TODO:
         - set_main_trainable(True); ensure _bias trainable; REBUILD optimizer over ALL params.
-        - Fine-tune: loss = task_loss + hp.clarity_lambda * model.clarity_loss(x); load_best.
+        - Fine-tune: loss = task_loss + hp.clarity_regularization * model.clarity_loss(x);
+          load_best.
         - model.center_main_effects(X_pool)
-        - model.center_interactions(X_pool, fold_bias=True)   # re-center, matches GAMI-Net fine_tune_all.
+        - model.center_interactions(X_pool, fold_bias=True)   # re-center, matches
+          GAMI-Net fine_tune_all. (Post-fine-tune geometry has moved, so the deployed
+          concurvity is NOT guaranteed ≤ threshold even for arm C — that is measured
+          post-hoc by concurvity_summary, it is not re-gated here.)
     """
     raise NotImplementedError
 
 
-def stage4_concurvity(model, train_loader, val_loader, X_pool, y_pool, hp) -> int:
-    """Iteratively remove the worst concurve pair until all ≤ 0.5. re-fine-tune each pass.
-
-    Args:
-        model: NA2M instance (fine-tuned).
-        train_loader: Internal training split loader.
-        val_loader: Internal validation split loader.
-        X_pool: 80% pool features (concurvity is computed here).
-        y_pool: 80% pool targets.
-        hp: Hyperparameters (iteration cap).
-
-    Returns:
-        fine_tune_pass_count: number of fine-tune passes performed (for the
-        accuracy non-inferiority comparison; B does one, C may do several).
-
-    TODO:
-        - passes = 0
-        - Loop (cap hp.max_concurvity_iters):
-            * scores = concurvity per active pair on X_pool, basis = ALL OTHER terms
-              (mains + other active interactions, exclude self); adj-R² with intercept;
-              p = K + (n_active_pairs - 1), recomputed each iter; score the RAW fitted
-              vector (purification = future work).
-            * worst_pair = max by (score, key) for DETERMINISTIC tie-break.
-            * if worst_score <= 0.5: break.
-            * remove_interaction(worst_pair)  (subtract-back handled inside); REBUILD opt.
-            * stage3_finetune(...)  (re-fine-tune + re-center); passes += 1
-        - Loop NEVER re-screens or re-adds (active set only shrinks).
-        - return passes
-    """
-    raise NotImplementedError
+# ----------------------------------------------------------------------------
+# REMOVED: stage4_concurvity (iterative remove-and-re-fine-tune).
+#
+# The old methodology scored interactions on the FINE-TUNED model, removed the
+# most concurve pair, and RE-FINE-TUNED, looping to a fixed point (capped by
+# max_concurvity_iters). That path is deleted. The ONLY place re-fine-tuning was
+# assumed is gone: concurvity is now a SELECTION-TIME gate inside stage2_select's
+# single sweep, and the model fine-tunes exactly once in stage3_finetune.
+#
+# If you find any remaining caller that loops fine-tuning or references
+# max_concurvity_iters / a per-removal Trainer rebuild, it is leftover from the
+# old design and should be removed.
+# ----------------------------------------------------------------------------
