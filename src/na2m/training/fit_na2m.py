@@ -105,7 +105,14 @@ def fit_na2m(
         else NoGate()
     )
 
-    raise NotImplementedError  # stage2_select(..., selection_policy=policy)
+    stage2_select(model, train_loader, val_loader, pool_loader, config, selection_policy=policy)
+    stage3_finetune(model, train_loader, val_loader, pool_loader, config)
+
+    model.eval()
+    return {
+        "model": model,
+        "active_pairs": model.active_interaction_pairs(),
+    }
 
 
 def stage1_main(model: NA2M,
@@ -264,19 +271,20 @@ def _eta_cut(
         Number of interactions to keep (0 means mains only, no interactions).
     """
     losses = np.array(val_losses)
-    best = float(np.min(losses))
+    # Default: take the index with the lowest loss (argmin).
+    best_idx = int(np.argmin(losses))
+    best = float(losses[best_idx])
     loss_range = float(np.max(losses) - best)
 
     if loss_range > 0:
         # Normalize each loss to [0, 1]: 0 = best, 1 = worst.
-        # Find the first index (fewest interactions) within eta of the minimum.
+        # If any earlier index is within eta of the minimum, prefer the simpler model.
         normalized = (losses - best) / loss_range
         candidates = np.where(normalized < eta)[0]
         if len(candidates) > 0:
-            return int(candidates[0])
+            best_idx = int(candidates[0])
 
-    # Degenerate: all losses identical (interactions added no signal) → keep none.
-    return 0
+    return best_idx
 
 
 def stage2_select(
@@ -308,10 +316,12 @@ def stage2_select(
     y_pool = pool_dataset.y.numpy()
     ranked_pairs = fast_screen(model, X_pool, y_pool, task=hp.task)
     top_m = ranked_pairs[: hp.top_m]
+    print(f"[stage2] FAST screen: top-{len(top_m)} pairs selected from {len(ranked_pairs)} candidates")
 
     # --- Add interactions + block-train (mains + _bias frozen) ---
     model.add_interactions(top_m)
     model.set_main_trainable(False)
+    print(f"[stage2] Block-training {len(top_m)} interaction subnets for {hp.block_train_epochs} epochs...")
 
     block_trainer = Trainer(
         model=model,
@@ -327,6 +337,7 @@ def stage2_select(
     )
     block_trainer.train(train_loader, val_loader)
     block_trainer.load_best()
+    print(f"[stage2] Block-train done. Best val metric: {block_trainer.best_val_metric:.4f}")
 
     model.center_interactions(pool_loader, fold_bias=False)
 
@@ -341,68 +352,83 @@ def stage2_select(
 
     # --- Rank interactions by contribution: variance of centered output on train split, descending ---
     ranked = _rank_by_contribution(train_inter_vecs, top_m)
+    print(f"[stage2] Contribution ranking (variance, descending):")
+    for j, k in ranked:
+        var = float(np.var(train_inter_vecs[f"{j},{k}"]))
+        print(f"  ({j},{k})  var={var:.6f}")
 
     # --- Single forward prune sweep (eval only — no retrain) ---
     accepted: list[tuple[int, int]] = []
     accepted_pool_vecs: list[np.ndarray] = []
 
     # Index 0 = baseline: mains only, no interactions
-    val_losses: list[float] = [
-        _partial_val_loss(val_main_sum, val_inter_vecs, [], bias, val_targets, hp.task)
-    ]
+    baseline_loss = _partial_val_loss(val_main_sum, val_inter_vecs, [], bias, val_targets, hp.task)
+    val_losses: list[float] = [baseline_loss]
+    print(f"[stage2] Sweep baseline val loss (mains only): {baseline_loss:.5f}")
 
     for pair in ranked:
-        #Selection policy NoGate always passes; 
-        #Selection policy Concurvitygate:
-        #checks adj-R² against the growing basis of already-accepted interactions + all mains
         candidate_vec = pool_inter_vecs[f"{pair[0]},{pair[1]}"]
         if not selection_policy.should_accept(candidate_vec, accepted_pool_vecs, pool_main_vecs):
+            print(f"  pair {pair} — SKIPPED by concurvity gate")
             continue
 
         accepted.append(pair)
         accepted_pool_vecs.append(candidate_vec)
-        val_losses.append(
-            _partial_val_loss(val_main_sum, val_inter_vecs, accepted, bias, val_targets, hp.task)
-        )
+        loss = _partial_val_loss(val_main_sum, val_inter_vecs, accepted, bias, val_targets, hp.task)
+        val_losses.append(loss)
+        print(f"  pair {pair} — accepted  val_loss={loss:.5f}")
 
     # --- η-prune: keep the fewest accepted interactions within eta of the best val loss ---
     cut = _eta_cut(val_losses, hp.eta_prune)
     survivors = accepted[:cut]
+    print(f"[stage2] eta-prune: val_losses={[round(l,5) for l in val_losses]}  cut={cut}  survivors={len(survivors)}")
 
     # --- Drop non-survivors (concurvity-skipped + predictive-cut) and fold survivors ---
     survivors_set = set(survivors)
     for pair in top_m:
         if pair not in survivors_set:
             model.remove_interaction(*pair)
+    print(f"[stage2] Final active pairs: {model.active_interaction_pairs()}")
 
     # Unfreeze everything — stage 3 fine-tunes all params and owns the final centering
     model.set_main_trainable(True)
 
 
-def stage3_finetune(model, train_loader, val_loader, X_pool, hp) -> None:
-    """Unfreeze all params; fine-tune ONCE with the clarity penalty; recenter.
+def stage3_finetune(
+    model: NA2M,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    pool_loader: DataLoader,
+    hp: NA2MConfig,
+) -> None:
+    """Fine-tune all params once with the clarity penalty, then recenter.
 
-    This is the model's ONLY fine-tune, for both arm B and arm C. There is no
-    re-fine-tune anywhere downstream.
+    This is the model's only fine-tune, for both arm B and arm C.
 
     Args:
-        model: NA2M instance (interactions selected & pruned, survivors folded).
+        model: NA2M instance (interactions selected & pruned, all params unfrozen).
         train_loader: Internal training split loader (fold-keyed).
         val_loader: Internal validation split loader (fold-keyed).
-        X_pool: 80% pool features — the reference sample for re-centering.
-        hp: Hyperparameters (clarity coefficient, fine-tune epochs).
-
-    TODO:
-        - set_main_trainable(True); ensure _bias trainable; REBUILD optimizer over ALL params.
-        - Fine-tune: loss = task_loss + hp.clarity_regularization * model.clarity_loss(x);
-          load_best.
-        - model.center_main_effects(X_pool)
-        - model.center_interactions(X_pool, fold_bias=True)   # re-center, matches
-          GAMI-Net fine_tune_all. (Post-fine-tune geometry has moved, so the deployed
-          concurvity is NOT guaranteed ≤ threshold even for arm C — that is measured
-          post-hoc by concurvity_summary, it is not re-gated here.)
+        pool_loader: Full 80% pool loader — reference sample for recentering.
+        hp: NA2MConfig with training hyperparameters.
     """
-    raise NotImplementedError
+    finetune_trainer = Trainer(
+        model=model,
+        lr=hp.lr,
+        decay_rate=hp.decay_rate,
+        output_regularization=hp.output_regularization,
+        l2_regularization=hp.l2_regularization,
+        task=hp.task,
+        num_epochs=hp.finetune_epochs,
+        patience=hp.patience,
+        val_check_interval=hp.val_check_interval,
+        clarity_lambda=hp.clarity_regularization,
+    )
+    finetune_trainer.train(train_loader, val_loader)
+    finetune_trainer.load_best()
+
+    model.center_main_effects(pool_loader)
+    model.center_interactions(pool_loader, fold_bias=True)
 
 
 # ----------------------------------------------------------------------------
