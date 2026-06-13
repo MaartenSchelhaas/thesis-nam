@@ -123,10 +123,7 @@ def evaluate_na2m_kfold(
 
         val_frac_of_pool = fixed_params["val_frac"] / (1 - fixed_params["test_frac"])
 
-        # Deterministic split for tuning — keyed off fold_idx.
-        tune_idx, tune_val_idx = train_test_split(
-            pool_idx, test_size=val_frac_of_pool, random_state=fold_idx
-        )
+        tune_idx, tune_val_idx = train_test_split(pool_idx, test_size=val_frac_of_pool)
 
         # Step 1: tune main-effects hyperparameters once per fold (arm A).
         tuned_config_path = fold_dir / "tuned_config.yaml"
