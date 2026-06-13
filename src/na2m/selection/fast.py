@@ -16,20 +16,17 @@ so the pipeline can degrade gracefully.
 Heavy imports (`interpret`) are done INSIDE functions so this module imports
 cleanly even when the package is absent.
 """
-
-
 def verify_fast_available() -> bool:
     """Check that the native FAST scorer imports and runs.
 
     Returns:
         True if the native `interpret` FAST path is usable, False otherwise.
-
-    TODO:
-        - Try importing the interpret native EBM FAST entry point.
-        - Optionally run a tiny smoke score to confirm the compiled lib loads.
-        - Return False (do not raise) on any ImportError / OSError.
     """
-    raise NotImplementedError
+    try:
+        from interpret.utils._measure_interactions import measure_interactions  # noqa: F401
+        return True
+    except Exception:
+        return False
 
 
 def fast_screen(main_model, X, y, task: str) -> list[tuple[int, int]]:
@@ -43,14 +40,24 @@ def fast_screen(main_model, X, y, task: str) -> list[tuple[int, int]]:
 
     Returns:
         Ranked list of (j, k) pairs, best first.
-
-    TODO:
-        - Compute residual-equivalent predictions from main_model (logit for clf).
-        - Call the interpret FAST scorer (get_interaction_list /
-          NativeEBM.fast_interaction_score) on (X, residuals).
-        - Return the ranked (j, k) list.
     """
-    raise NotImplementedError
+    import numpy as np
+    import torch
+    from interpret.utils._measure_interactions import measure_interactions
+
+    if not isinstance(X, np.ndarray):
+        X = np.asarray(X)
+    if not isinstance(y, np.ndarray):
+        y = np.asarray(y)
+
+    main_model.eval()
+    with torch.no_grad():
+        logits, _ = main_model(torch.as_tensor(X, dtype=torch.float32))
+        init_score = logits.squeeze(-1).cpu().numpy()
+
+    objective = "log_loss" if task == "classification" else "rmse"
+    ranked = measure_interactions(X, y, init_score=init_score, objective=objective)
+    return [pair for pair, _ in ranked]
 
 
 def fast_screen_fallback(main_model, X, y, task: str) -> list[tuple[int, int]]:

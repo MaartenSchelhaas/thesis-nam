@@ -200,7 +200,9 @@ def stage2_select(model, train_loader, val_loader, pool_loader, hp, *, selection
           that the surviving set is fixed.
         - unfreeze _bias (stage 3 trains it).
     """
+    #We have the model with trained main effects. Now, on those residuals, we should compute the Top M fast ranking interaction terms
     
+
 
 
 
