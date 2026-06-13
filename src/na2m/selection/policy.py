@@ -26,7 +26,6 @@ class SelectionPolicy(Protocol):
 
     def should_accept(
         self,
-        pair: tuple[int, int],
         candidate_vec: np.ndarray,
         accepted_vecs: list[np.ndarray],
         main_vecs: list[np.ndarray],
@@ -34,11 +33,10 @@ class SelectionPolicy(Protocol):
         """Return True if this candidate should be added to the accepted set.
 
         Args:
-            pair: (j, k) interaction under consideration.
-            candidate_vec: (N,) raw block-trained output of this pair on the pool.
-            accepted_vecs: raw output vectors of already-accepted interactions,
+            candidate_vec: (N,) block-trained output of this pair on the pool.
+            accepted_vecs: output vectors of already-accepted interactions,
                 in acceptance order. Empty on the first call.
-            main_vecs: raw output vectors of all main effects on the pool.
+            main_vecs: output vectors of all main effects on the pool.
                 Fixed for the duration of the sweep.
 
         Returns:
@@ -53,7 +51,6 @@ class NoGate:
 
     def should_accept(
         self,
-        pair: tuple[int, int],
         candidate_vec: np.ndarray,
         accepted_vecs: list[np.ndarray],
         main_vecs: list[np.ndarray],
@@ -78,7 +75,6 @@ class ConcurvityGate:
 
     def should_accept(
         self,
-        pair: tuple[int, int],
         candidate_vec: np.ndarray,
         accepted_vecs: list[np.ndarray],
         main_vecs: list[np.ndarray],

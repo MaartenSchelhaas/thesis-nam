@@ -45,6 +45,7 @@ from nam.data.dataset import NAMDataset
 from typing import cast
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 
@@ -140,6 +141,143 @@ def stage1_main(model: NA2M,
     model.center_main_effects(pool_loader)
 
 
+# ---------------------------------------------------------------------------
+# Private helpers for stage2_select: pure functions of stored output vectors
+# ---------------------------------------------------------------------------
+
+def _collect_outputs(
+    model: NA2M,
+    loader: DataLoader,
+) -> tuple[list[np.ndarray], dict[str, np.ndarray], np.ndarray]:
+    """One no-grad eval pass: collect every active term's centered output vector.
+
+    Args:
+        model: NA2M instance; switched to eval mode internally.
+        loader: DataLoader yielding (X, y, weights) batches.
+
+    Returns:
+        main_vecs:  list of main subnet output vectors
+        inter_vecs: list of interaction subnet output vectors
+                    dict "j,k" vector (centered). Empty if no interactions.
+        targets:    vector of target labels.
+    """
+    was_training = model.training
+    model.eval()
+
+    n_features = model.num_features
+    pairs = model.active_interaction_pairs()
+
+    main_lists: list[list[np.ndarray]] = [[] for _ in range(n_features)]
+    inter_lists: dict[str, list[np.ndarray]] = {f"{j},{k}": [] for j, k in pairs}
+    target_list: list[np.ndarray] = []
+
+    with torch.no_grad():
+        for X_batch, y_batch, _ in loader:
+            main_out_list = model.main_outputs(X_batch)
+            for j, out in enumerate(main_out_list):
+                main_lists[j].append(out.squeeze(1).cpu().numpy())
+
+            inter_out_list = model.inter_outputs(X_batch)
+            for (j, k), out in zip(pairs, inter_out_list):
+                inter_lists[f"{j},{k}"].append(out.squeeze(1).cpu().numpy())
+
+            target_list.append(y_batch.cpu().numpy())
+
+    if was_training:
+        model.train()
+
+    main_vecs = [np.concatenate(main_lists[j]) for j in range(n_features)]
+    inter_vecs = {f"{j},{k}": np.concatenate(inter_lists[f"{j},{k}"]) for j, k in pairs}
+    targets = np.concatenate(target_list)
+    return main_vecs, inter_vecs, targets
+
+
+def _rank_by_contribution(
+    inter_vecs: dict[str, np.ndarray],
+    pairs: list[tuple[int, int]],
+) -> list[tuple[int, int]]:
+    """Rank pairs by variance of their centered output on the train split, descending.
+
+    Args:
+        inter_vecs: dict "j,k" -> (N,) centered output array (train split).
+        pairs: Candidate pairs to rank.
+
+    Returns:
+        Pairs sorted by output variance, highest first.
+    """
+    return sorted(
+        pairs,
+        key=lambda p: float(np.var(inter_vecs[f"{p[0]},{p[1]}"])),
+        reverse=True,
+    )
+
+
+def _partial_val_loss(
+    val_main_sum: np.ndarray,
+    val_inter_vecs: dict[str, np.ndarray],
+    accepted: list[tuple[int, int]],
+    bias: float,
+    targets: np.ndarray,
+    task: str,
+) -> float:
+    """Val loss of {mains + accepted interactions} — no model calls, pure numpy.
+
+    Because the model is additive, the partial prediction is just the sum of
+    the pre-collected centered output vectors for the terms we want to include.
+    Non-accepted subnets (still in inter_nns) contribute nothing here.
+
+    Args:
+        val_main_sum: (N,) sum of all centered main outputs on the val split.
+        val_inter_vecs: dict "j,k" -> (N,) centered inter output on val split.
+        accepted: Pairs whose subnets contribute to this partial prediction.
+        bias: model._bias scalar value.
+        targets: (N,) val labels.
+        task: 'classification' or 'regression'.
+
+    Returns:
+        Cross-entropy loss (classification) or MSE (regression).
+    """
+    pred = val_main_sum + bias
+    for j, k in accepted:
+        pred = pred + val_inter_vecs[f"{j},{k}"]
+
+    pred_t = torch.from_numpy(pred).float()
+    targets_t = torch.from_numpy(targets).float()
+
+    if task == "classification":
+        return float(F.binary_cross_entropy_with_logits(pred_t, targets_t))
+    else:
+        return float(F.mse_loss(pred_t, targets_t))
+
+
+def _eta_cut(
+    val_losses: list[float],
+    eta: float,
+) -> int:
+    """Return the fewest accepted interactions whose val loss is within eta of the minimum.
+
+    Args:
+        val_losses: Loss sequence; index 0 = mains only, index k = k interactions.
+        eta: Tolerance (hp.eta_prune). 0 -> keep argmin; approaching 1 -> keep fewer.
+
+    Returns:
+        Number of interactions to keep (0 means mains only, no interactions).
+    """
+    losses = np.array(val_losses)
+    best = float(np.min(losses))
+    loss_range = float(np.max(losses) - best)
+
+    if loss_range > 0:
+        # Normalize each loss to [0, 1]: 0 = best, 1 = worst.
+        # Find the first index (fewest interactions) within eta of the minimum.
+        normalized = (losses - best) / loss_range
+        candidates = np.where(normalized < eta)[0]
+        if len(candidates) > 0:
+            return int(candidates[0])
+
+    # Degenerate: all losses identical (interactions added no signal) → keep none.
+    return 0
+
 
 def stage2_select(
     model: NA2M,
@@ -150,67 +288,19 @@ def stage2_select(
     *,
     selection_policy: SelectionPolicy,
 ) -> None:
-    """FAST screen → block-train top-M → ONE forward prune sweep (two gates).
+    """FAST screen → block-train top-M interactions jointly → single forward prune sweep.
 
-    The sweep is a SINGLE pass in decreasing contribution order; it NEVER retrains
-    and NEVER re-fine-tunes. Arm B and arm C run identical code here — the only
-    difference is the selection_policy passed in by the caller.
+    The sweep ranks block-trained subnets by output variance, applies the selection
+    policy (concurvity gate for arm C, no-op for arm B), then η-prunes the accepted
+    prefix by val loss. No retraining at any point; the model fine-tunes once in stage 3.
 
     Args:
-        model: NA2M instance (mains trained + centered).
-        train_loader: Internal training split loader (fold-keyed).
-        val_loader: Internal validation split loader (fold-keyed).
-        pool_loader: Full 80% pool loader — used for FAST screen, concurvity
-            basis vectors, and re-centering.
-        hp: Hyperparameters (top_m, eta_prune, block-train epochs).
-        selection_policy: Decides per-candidate acceptance during the sweep.
-            Pass NoGate() for arm B, ConcurvityGate(threshold) for arm C.
-            Swap in any SelectionPolicy implementation to change the strategy.
-
-        # Block-train Trainer: clarity ON, SAME coefficient as stage 3
-        # (hp.clarity_regularization).
-
-    TODO:
-        - FAST: fast_screen(main_model=model, X, y, task) -> ranked (j,k); take top_m.
-        - add_interactions(top_m); set_main_trainable(False); ALSO freeze _bias for
-          block-train (it is about to be re-centered; do not let it absorb signal);
-          REBUILD optimizer over interaction params only.
-        - Block-train ALL top_m subnets JOINTLY, once, with
-          loss = task_loss + hp.clarity_regularization * model.clarity_loss(x)
-          (same coefficient as stage 3, matches GAMI-Net train_interaction). load_best.
-        - center_interactions(X_pool, fold_bias=False)   # per-term offsets HELD,
-          _bias untouched, so any candidate later skipped/excluded leaves no orphan
-          bias and cannot contaminate the sweep's validation loss.
-        - Contribution ranking = VARIANCE of each centered block-trained interaction
-          output vector on the TRAIN split (GAMI-Net moving_norm, w_i=1), descending.
-
-        --- SINGLE FORWARD PRUNE SWEEP (eval only, no retrain) ---
-        - accepted = []        # ordered list of (j,k) that passed the gate(s)
-        - val_losses = []      # val loss AFTER accepting each candidate
-        - For cand in ranking (decreasing contribution):
-            * SELECTION GATE — delegate to the policy, which carries all strategy
-              details (threshold, formula, state):
-                if not selection_policy.should_accept(cand, cand_vec, accepted_vecs, main_vecs):
-                    continue   # SKIP — never reconsidered, not added to `accepted`.
-            * accepted.append(cand)
-            * val_losses.append( val loss of {mains + accepted} on val_loader )
-                # Compute from summed CENTERED per-term outputs + _bias, NOT a full
-                # forward(): non-accepted top_m subnets are still present but must
-                # contribute nothing to this measurement.
-        - PREDICTIVE-CONTRIBUTION GATE (after the sweep, on the accepted prefix):
-            losses = val_losses; lo = min(losses); rng = max(losses) - lo
-            if rng > 0 and any((losses - lo)/rng <= hp.eta_prune):
-                cut = first index with (losses[i]-lo)/rng <= hp.eta_prune
-            else:
-                cut = argmin(losses)              # degenerate-range fallback
-            survivors = accepted[: cut + 1]        # CHECK off-by-one vs reference prune
-
-        - DROP every top_m pair NOT in `survivors` (both concurvity-skipped and
-          predictive-cut): remove_interaction each (nothing folded yet → clean
-          delete); REBUILD optimizer.
-        - center_interactions(X_pool, fold_bias=True)   # fold survivors ONCE now
-          that the surviving set is fixed.
-        - unfreeze _bias (stage 3 trains it).
+        model: NA2M with mains trained and centered.
+        train_loader: Internal training split (fold-keyed).
+        val_loader: Internal validation split (fold-keyed).
+        pool_loader: Full 80% pool — for centering and concurvity basis.
+        hp: Hyperparameters (top_m, eta_prune, block_train_epochs, ...).
+        selection_policy: NoGate() for arm B; ConcurvityGate(threshold) for arm C.
     """
     # --- FAST screen ---
     pool_dataset = cast(NAMDataset, pool_loader.dataset)
@@ -240,8 +330,53 @@ def stage2_select(
 
     model.center_interactions(pool_loader, fold_bias=False)
 
-    # --- TODO: contribution ranking + forward prune sweep + η-prune ---
-   
+    # --- Collect centered per-term output vectors (one pass each; no model calls during sweep) ---
+    _, train_inter_vecs, _ = _collect_outputs(model, train_loader)
+    val_main_vecs, val_inter_vecs, val_targets = _collect_outputs(model, val_loader)
+    pool_main_vecs, pool_inter_vecs, _ = _collect_outputs(model, pool_loader)
+
+    # Sum all centered main outputs on val split — fixed for the entire sweep
+    val_main_sum: np.ndarray = np.sum(np.stack(val_main_vecs, axis=0), axis=0)
+    bias = model._bias.item()
+
+    # --- Rank interactions by contribution: variance of centered output on train split, descending ---
+    ranked = _rank_by_contribution(train_inter_vecs, top_m)
+
+    # --- Single forward prune sweep (eval only — no retrain) ---
+    accepted: list[tuple[int, int]] = []
+    accepted_pool_vecs: list[np.ndarray] = []
+
+    # Index 0 = baseline: mains only, no interactions
+    val_losses: list[float] = [
+        _partial_val_loss(val_main_sum, val_inter_vecs, [], bias, val_targets, hp.task)
+    ]
+
+    for pair in ranked:
+        #Selection policy NoGate always passes; 
+        #Selection policy Concurvitygate:
+        #checks adj-R² against the growing basis of already-accepted interactions + all mains
+        candidate_vec = pool_inter_vecs[f"{pair[0]},{pair[1]}"]
+        if not selection_policy.should_accept(candidate_vec, accepted_pool_vecs, pool_main_vecs):
+            continue
+
+        accepted.append(pair)
+        accepted_pool_vecs.append(candidate_vec)
+        val_losses.append(
+            _partial_val_loss(val_main_sum, val_inter_vecs, accepted, bias, val_targets, hp.task)
+        )
+
+    # --- η-prune: keep the fewest accepted interactions within eta of the best val loss ---
+    cut = _eta_cut(val_losses, hp.eta_prune)
+    survivors = accepted[:cut]
+
+    # --- Drop non-survivors (concurvity-skipped + predictive-cut) and fold survivors ---
+    survivors_set = set(survivors)
+    for pair in top_m:
+        if pair not in survivors_set:
+            model.remove_interaction(*pair)
+
+    # Unfreeze everything — stage 3 fine-tunes all params and owns the final centering
+    model.set_main_trainable(True)
 
 
 def stage3_finetune(model, train_loader, val_loader, X_pool, hp) -> None:

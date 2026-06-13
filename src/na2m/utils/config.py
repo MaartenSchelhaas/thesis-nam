@@ -135,7 +135,7 @@ class NA2MConfig:
     # is within η of the minimum (fallback to argmin if the range is degenerate).
     # 0.0 = cut exactly at the argmin (no slack toward simpler models).
 
-    block_train_epochs: int = 100
+    block_train_epochs: int = 1000
     # Epochs for the interaction-only block-training step (Stage 2,
     # main-effect weights frozen). All top_m subnets are trained JOINTLY here,
     # once, before the sweep — the sweep itself NEVER retrains.
