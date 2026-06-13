@@ -39,6 +39,7 @@ HARD CONSTRAINTS honoured here:
 from na2m.models.na2m import NA2M
 from na2m.training.trainer import Trainer
 from na2m.utils.config import NA2MConfig
+from na2m.selection.policy import SelectionPolicy, NoGate, ConcurvityGate
 import torch
 from torch.utils.data import DataLoader
 
@@ -93,7 +94,13 @@ def fit_na2m(
             "active_pairs": model.active_interaction_pairs(),  # []
         }
 
-    raise NotImplementedError
+    policy: SelectionPolicy = (
+        ConcurvityGate(threshold=config.concurvity_threshold)
+        if with_concurvity_filter
+        else NoGate()
+    )
+
+    raise NotImplementedError  # stage2_select(..., selection_policy=policy)
 
 
 def stage1_main(model: NA2M,
@@ -130,21 +137,23 @@ def stage1_main(model: NA2M,
 
 
 
-def stage2_select(model, train_loader, val_loader, X_pool, y_pool, hp, *, with_concurvity_filter: bool) -> None:
+def stage2_select(model, train_loader, val_loader, pool_loader, hp, *, selection_policy: SelectionPolicy) -> None:
     """FAST screen → block-train top-M → ONE forward prune sweep (two gates).
 
     The sweep is a SINGLE pass in decreasing contribution order; it NEVER retrains
-    and NEVER re-fine-tunes. Arm B and arm C run identical code here except that
-    the concurvity gate only fires when with_concurvity_filter is True.
+    and NEVER re-fine-tunes. Arm B and arm C run identical code here — the only
+    difference is the selection_policy passed in by the caller.
 
     Args:
         model: NA2M instance (mains trained + centered).
         train_loader: Internal training split loader (fold-keyed).
         val_loader: Internal validation split loader (fold-keyed).
-        X_pool: 80% pool features (FAST screen + concurvity basis + centering).
-        y_pool: 80% pool targets.
-        hp: Hyperparameters (top_m, eta_prune, concurvity_threshold, block-train epochs).
-        with_concurvity_filter: gate switch (arm C True, arm B False).
+        pool_loader: Full 80% pool loader — used for FAST screen, concurvity
+            basis vectors, and re-centering.
+        hp: Hyperparameters (top_m, eta_prune, block-train epochs).
+        selection_policy: Decides per-candidate acceptance during the sweep.
+            Pass NoGate() for arm B, ConcurvityGate(threshold) for arm C.
+            Swap in any SelectionPolicy implementation to change the strategy.
 
         # Block-train Trainer: clarity ON, SAME coefficient as stage 3
         # (hp.clarity_regularization).
@@ -167,12 +176,9 @@ def stage2_select(model, train_loader, val_loader, X_pool, y_pool, hp, *, with_c
         - accepted = []        # ordered list of (j,k) that passed the gate(s)
         - val_losses = []      # val loss AFTER accepting each candidate
         - For cand in ranking (decreasing contribution):
-            * CONCURVITY GATE (only if with_concurvity_filter):
-                basis = raw vectors on X_pool of {all mains} + {accepted interactions}
-                        (the CURRENTLY accepted set — grows as the sweep proceeds,
-                         NOT the full candidate set).
-                score = concurvity_adjr2(cand_raw_vec_pool, basis)   # shared helper
-                if score > hp.concurvity_threshold:
+            * SELECTION GATE — delegate to the policy, which carries all strategy
+              details (threshold, formula, state):
+                if not selection_policy.should_accept(cand, cand_vec, accepted_vecs, main_vecs):
                     continue   # SKIP — never reconsidered, not added to `accepted`.
             * accepted.append(cand)
             * val_losses.append( val loss of {mains + accepted} on val_loader )
@@ -194,6 +200,10 @@ def stage2_select(model, train_loader, val_loader, X_pool, y_pool, hp, *, with_c
           that the surviving set is fixed.
         - unfreeze _bias (stage 3 trains it).
     """
+    
+
+
+
     raise NotImplementedError
 
 
