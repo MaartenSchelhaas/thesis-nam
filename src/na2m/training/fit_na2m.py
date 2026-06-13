@@ -58,6 +58,7 @@ def fit_na2m(
     *,
     with_interactions: bool,
     with_concurvity_filter: bool,
+    trial=None,
 ) -> dict:
     """Run the staged NA2M training pipeline for one arm on one (fold, seed).
 
@@ -90,7 +91,7 @@ def fit_na2m(
         - stage3_finetune(...)   # the SINGLE fine-tune, both arms.
         - model.eval(); assemble and return the result dict.
     """
-    stage1_main(model, train_loader, val_loader, pool_loader, config)
+    stage1_main(model, train_loader, val_loader, pool_loader, config, trial=trial)
 
     if not with_interactions:
         model.eval()
@@ -115,11 +116,15 @@ def fit_na2m(
     }
 
 
-def stage1_main(model: NA2M,
-                train_loader: DataLoader,
-                val_loader: DataLoader,
-                pool_loader: DataLoader,
-                config: NA2MConfig) -> None:
+def stage1_main(
+    model: NA2M,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    pool_loader: DataLoader,
+    config: NA2MConfig,
+    *,
+    trial=None,
+) -> None:
     """Train the main bank (Trainer over all params), restore best, then center.
 
     clarity_lambda is 0.0 here — no interactions exist yet so the penalty is a no-op.
@@ -143,7 +148,7 @@ def stage1_main(model: NA2M,
         val_check_interval=config.val_check_interval,
         clarity_lambda=0.0,
     )
-    stage_1_trainer.train(train_loader, val_loader)
+    stage_1_trainer.train(train_loader, val_loader, trial)
     stage_1_trainer.load_best()
     model.center_main_effects(pool_loader)
 
@@ -271,20 +276,19 @@ def _eta_cut(
         Number of interactions to keep (0 means mains only, no interactions).
     """
     losses = np.array(val_losses)
-    # Default: take the index with the lowest loss (argmin).
-    best_idx = int(np.argmin(losses))
-    best = float(losses[best_idx])
+    best = float(np.min(losses))
     loss_range = float(np.max(losses) - best)
 
     if loss_range > 0:
         # Normalize each loss to [0, 1]: 0 = best, 1 = worst.
-        # If any earlier index is within eta of the minimum, prefer the simpler model.
+        # Find the first index (fewest interactions) within eta of the minimum.
         normalized = (losses - best) / loss_range
         candidates = np.where(normalized < eta)[0]
         if len(candidates) > 0:
-            best_idx = int(candidates[0])
+            return int(candidates[0])
 
-    return best_idx
+    # Degenerate: all losses identical (interactions added no signal) → keep none.
+    return 0
 
 
 def stage2_select(
