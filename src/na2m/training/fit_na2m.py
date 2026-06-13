@@ -137,7 +137,15 @@ def stage1_main(model: NA2M,
 
 
 
-def stage2_select(model, train_loader, val_loader, pool_loader, hp, *, selection_policy: SelectionPolicy) -> None:
+def stage2_select(
+    model: NA2M,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    pool_loader: DataLoader,
+    hp: NA2MConfig,
+    *,
+    selection_policy: SelectionPolicy,
+) -> None:
     """FAST screen → block-train top-M → ONE forward prune sweep (two gates).
 
     The sweep is a SINGLE pass in decreasing contribution order; it NEVER retrains
@@ -201,9 +209,6 @@ def stage2_select(model, train_loader, val_loader, pool_loader, hp, *, selection
         - unfreeze _bias (stage 3 trains it).
     """
     #We have the model with trained main effects. Now, on those residuals, we should compute the Top M fast ranking interaction terms
-    
-
-
 
 
     raise NotImplementedError

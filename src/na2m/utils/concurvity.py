@@ -1,70 +1,67 @@
 """
 concurvity — the ONE adjusted-R² concurvity formula, shared by gate and diagnostic.
 
-A single source of truth so the Stage-2 selection
-gate and the post-hoc headline diagnostic can never drift apart:
-
-    * Stage-2 gate (selection-time, arm C) — fit_na2m.stage2_select scores a
-      candidate's BLOCK-TRAINED output against {mains + already-accepted
-      interactions} on the 80% pool; skips the candidate if the score > τ.
-    * Headline diagnostic (deployment-time) — reduce.concurvity_summary scores
-      each retained interaction of the FINE-TUNED model against all OTHER fitted
-      components on the 80% pool. Same formula; NOT re-gated, so for arm C it may
-      exceed τ because fine-tuning moved the geometry.
-
-Pure numpy, no torch and no model handle — callers pass already-evaluated RAW
-output vectors. Centering is handled by the OLS intercept (fit WITH intercept ⇔
-center every column over THIS sample), so callers pass raw vectors.
+Centering is handled by the OLS intercept (fit WITH intercept ⇔
+center every column over THIS sample), so callers can pass raw vectors.
 """
 
 import numpy as np
 
+TermId = tuple[str, int] | tuple[str, int, int]  # ("main", j) or ("inter", j, k)
+
 
 def concurvity_adjr2(target_vec: np.ndarray, basis_vecs: np.ndarray) -> float:
-    """Adjusted R² of one term's output regressed on a basis of other terms.
-
-    OLS of `target_vec` on `basis_vecs` WITH an intercept; return adjusted R².
-    Equivalent to the observed-concurvity index: how much of this term is
-    redundant with (linearly explainable by) the other fitted components.
+    """OLS of target_vec on basis_vecs. Computes adjusted r-squared, which gets used as multivariate concurvity metric. 
 
     Args:
-        target_vec: (N,) or (N, 1) RAW output vector of the term under test.
-        basis_vecs: (N, p) matrix whose columns are the RAW output vectors of the
-            regressor terms (mains + the relevant other interactions). p columns,
-            recomputed by the caller each call since the active set varies.
+        target_vec (np.ndarray): Output vector of the term under test
+        basis_vecs (np.ndarray): Output vector of other terms to check concurvity against. 
 
     Returns:
-        Adjusted R² in (-inf, 1]. By convention return 0.0 when basis_vecs has no
-        columns (p == 0): a term with no competitors has zero concurvity.
-
-    TODO:
-        - Flatten target to (N,); design = [1 | basis_vecs] (intercept column).
-        - Solve least squares (np.linalg.lstsq); residual SS / total SS → R².
-        - adj = 1 - (1 - R²) * (N - 1) / (N - p - 1); guard N - p - 1 <= 0.
-        - p == 0 → return 0.0.
+        float: Adjusted R-squared. 
+        0.0 if basic_vecs is empty. 
     """
-    raise NotImplementedError
+
+    # OLS with intercept
+    y = target_vec.flatten()
+    X = basis_vecs
+    N, p = X.shape
+
+    if p == 0:
+        return 0.0
+
+    X_design = np.column_stack([np.ones(N), X])
+    beta, _, _, _ = np.linalg.lstsq(X_design, y, rcond=None)
+    y_hat = X_design @ beta
+
+    ss_res = ((y - y_hat) ** 2).sum()
+    ss_tot = ((y - y.mean()) ** 2).sum()
+
+    if ss_tot == 0.0:
+        return 0.0
+
+    r2 = 1.0 - ss_res / ss_tot
+    adj_r2 = 1.0 - (1.0 - r2) * (N - 1) / (N - p - 1)
+    return float(adj_r2)
 
 
-def concurvity_score(term_id, term_vectors: dict, *, exclude_self: bool = True) -> float:
-    """Concurvity of one term vs ALL other terms in a {term_id: vector} dict.
+def concurvity_score(term_id: TermId, term_vectors: dict[TermId, np.ndarray]) -> float:
+    """Concurvity of one term against all other terms.
 
-    Thin convenience wrapping concurvity_adjr2: assemble the basis from every
-    OTHER term's vector (self excluded) and score. Used by the headline
-    diagnostic; the Stage-2 gate builds its (growing, accepted-only) basis
-    directly and calls concurvity_adjr2.
+    Convenience wrapper for the post-hoc diagnostic in the reducer, which
+    works from a {term_id: output_vector} stored dict. The Stage-2 gate calls
+    concurvity_adjr2 directly since it already has the vectors split out in memory.
 
     Args:
-        term_id: the term under test (key into term_vectors).
-        term_vectors: {term_id: (N,) or (N,1) RAW vector}, all on the SAME sample
-            (the 80% pool for the diagnostic).
-        exclude_self: if True (default) drop term_id from the basis.
+        term_id: Key of the term under test.
+        term_vectors: All subnet vecotrs, Dict mapping every term_id to its (N,) output vector
+            (raw, evaluated on the same sample for all terms).
 
     Returns:
-        Adjusted R² of term_id against the other terms.
-
-    TODO:
-        - basis = column-stack of term_vectors[t] for t != term_id (if exclude_self).
-        - return concurvity_adjr2(term_vectors[term_id], basis).
+        Adjusted R² of term_id regressed on all other terms.
     """
-    raise NotImplementedError
+    target = term_vectors[term_id]
+    other_vecs = [v for t, v in term_vectors.items() if t != term_id]
+    N = target.flatten().shape[0]
+    basis = np.column_stack(other_vecs) if other_vecs else np.empty((N, 0))
+    return concurvity_adjr2(target, basis)
