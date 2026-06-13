@@ -244,6 +244,7 @@ class NA2M(nn.Module):
         """
         for subnet in self.main_nns:
             subnet.requires_grad_(flag)
+        self._bias.requires_grad_(flag)
 
     # ------------------------------------------------------------------
     # Centering

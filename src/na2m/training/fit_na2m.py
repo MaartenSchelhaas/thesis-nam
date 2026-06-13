@@ -40,6 +40,10 @@ from na2m.models.na2m import NA2M
 from na2m.training.trainer import Trainer
 from na2m.utils.config import NA2MConfig
 from na2m.selection.policy import SelectionPolicy, NoGate, ConcurvityGate
+from na2m.selection.fast import fast_screen
+from nam.data.dataset import NAMDataset
+from typing import cast
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
@@ -208,10 +212,36 @@ def stage2_select(
           that the surviving set is fixed.
         - unfreeze _bias (stage 3 trains it).
     """
-    #We have the model with trained main effects. Now, on those residuals, we should compute the Top M fast ranking interaction terms
+    # --- FAST screen ---
+    pool_dataset = cast(NAMDataset, pool_loader.dataset)
+    X_pool = pool_dataset.X.numpy()
+    y_pool = pool_dataset.y.numpy()
+    ranked_pairs = fast_screen(model, X_pool, y_pool, task=hp.task)
+    top_m = ranked_pairs[: hp.top_m]
 
+    # --- Add interactions + block-train (mains + _bias frozen) ---
+    model.add_interactions(top_m)
+    model.set_main_trainable(False)
 
-    raise NotImplementedError
+    block_trainer = Trainer(
+        model=model,
+        lr=hp.lr,
+        decay_rate=hp.decay_rate,
+        output_regularization=hp.output_regularization,
+        l2_regularization=hp.l2_regularization,
+        task=hp.task,
+        num_epochs=hp.block_train_epochs,
+        patience=hp.patience,
+        val_check_interval=hp.val_check_interval,
+        clarity_lambda=hp.clarity_regularization,
+    )
+    block_trainer.train(train_loader, val_loader)
+    block_trainer.load_best()
+
+    model.center_interactions(pool_loader, fold_bias=False)
+
+    # --- TODO: contribution ranking + forward prune sweep + η-prune ---
+   
 
 
 def stage3_finetune(model, train_loader, val_loader, X_pool, hp) -> None:

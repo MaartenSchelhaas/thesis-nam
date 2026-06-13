@@ -43,16 +43,6 @@ class Trainer:
         patience: int,
         val_check_interval: int,
         run_dir: str | None = None,
-        params=None,
-
-        #clarity_lambda: float = 0.0,
-        # NA2M marginal-clarity coefficient. 0.0 disables the term, which is the
-        # correct value for the frozen NAM baseline and for stage 1 (no interactions
-        # exist). Stages 2 (block-train) and 3 (fine-tune) pass hp.clarity_lambda,
-        # the SAME value in both, matching GAMI-Net's shared reg_clarity.
-
-
-
     ):
         """Initialise the NAM Trainer.
 
@@ -67,11 +57,7 @@ class Trainer:
             patience (int): Early stopping, stop if val metric doesn't improve for this many epochs.
             val_check_interval (int): Evaluate on validation set every N epochs.
             run_dir (Path): Directory to save checkpoints and metrics (created before passing in).
-            params: Optional iterable of parameters to optimize. Defaults to
-                model.parameters(). The NA2M orchestrator passes a parameter subset
-                (e.g. interaction-only params) when staging; rebuild the Trainer (or
-                its optimizer) after any structural model change.
-        """
+"""
         self.model = model
         self.output_regularization = output_regularization
         self.l2_regularization = l2_regularization
@@ -94,7 +80,6 @@ class Trainer:
         self.model = model.to(self.device)
 
         self.optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-        self.optimizer = torch.optim.Adam(params if params is not None else model.parameters(), lr=lr)
         self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=1, gamma=decay_rate)
 
         self.best_val_metric = 0.0 if task == "classification" else float("inf")

@@ -89,11 +89,10 @@ class ConcurvityGate:
         set, NOT the full candidate set). Calls concurvity_adjr2 from
         na2m.utils.concurvity — the single shared formula.
 
-        TODO:
-            - from na2m.utils.concurvity import concurvity_adjr2
-            - basis = np.column_stack(main_vecs + accepted_vecs) if any else
-              np.empty((len(candidate_vec), 0))
-            - score = concurvity_adjr2(candidate_vec, basis)
-            - return score <= self.threshold
         """
-        raise NotImplementedError
+        from na2m.utils.concurvity import concurvity_adjr2
+
+        all_basis = main_vecs + accepted_vecs
+        basis = np.column_stack(all_basis) if all_basis else np.empty((len(candidate_vec), 0))
+        score = concurvity_adjr2(candidate_vec, basis)
+        return score <= self.threshold

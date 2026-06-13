@@ -30,7 +30,6 @@ class Trainer(NAMTrainer):
         patience: int,
         val_check_interval: int,
         run_dir: str | None = None,
-        params=None,
         clarity_lambda: float = 0.0,
     ):
         """Initialise the NA2M Trainer.
@@ -64,7 +63,6 @@ class Trainer(NAMTrainer):
             patience=patience,
             val_check_interval=val_check_interval,
             run_dir=run_dir,
-            params=params,
         )
         self.model: NA2M
         self.clarity_lambda = clarity_lambda
