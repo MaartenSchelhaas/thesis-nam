@@ -175,6 +175,7 @@ def _collect_outputs(
     """
     was_training = model.training
     model.eval()
+    device = next(model.parameters()).device
 
     n_features = model.num_features
     pairs = model.active_interaction_pairs()
@@ -185,6 +186,7 @@ def _collect_outputs(
 
     with torch.no_grad():
         for X_batch, y_batch, _ in loader:
+            X_batch = X_batch.to(device)
             main_out_list = model.main_outputs(X_batch)
             for j, out in enumerate(main_out_list):
                 main_lists[j].append(out.squeeze(1).cpu().numpy())

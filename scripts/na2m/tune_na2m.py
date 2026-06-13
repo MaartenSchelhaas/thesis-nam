@@ -121,11 +121,12 @@ def objective(
     )
 
     model.eval()
+    device = next(model.parameters()).device
     all_logits, all_targets = [], []
     with torch.no_grad():
         for X_batch, y_batch, _ in val_loader:
-            logits, _ = model(X_batch)
-            all_logits.append(logits)
+            logits, _ = model(X_batch.to(device))
+            all_logits.append(logits.cpu())
             all_targets.append(y_batch)
     return float(auroc(torch.cat(all_logits), torch.cat(all_targets)))
 

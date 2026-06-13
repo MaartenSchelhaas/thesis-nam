@@ -266,12 +266,14 @@ class NA2M(nn.Module):
         """
         was_training = self.training
         self.eval()  # disable dropout — we want deterministic outputs
+        device = self._bias.device
         with torch.no_grad():
             # accum[j] will hold the sum of subnet j's outputs across all N samples
-            accum = torch.zeros(self.num_features)
+            accum = torch.zeros(self.num_features, device=device)
             n = 0  # total sample count across all batches
 
             for X_batch, _, _ in pool_loader:
+                X_batch = X_batch.to(device)
                 for j in range(self.num_features):
                     # raw output of subnet j for this batch, shape (batch, 1)
                     raw = self.main_nns[j](X_batch[:, j:j+1])
@@ -313,14 +315,16 @@ class NA2M(nn.Module):
         """
         was_training = self.training
         self.eval()  # disable dropout
+        device = self._bias.device
         with torch.no_grad():
             pairs = self.active_interaction_pairs()
 
             # one accumulator per active pair, keyed by "j,k"
-            accum = {f"{j},{k}": torch.zeros(1) for j, k in pairs}
+            accum = {f"{j},{k}": torch.zeros(1, device=device) for j, k in pairs}
             n = 0
 
             for X_batch, _, _ in pool_loader:
+                X_batch = X_batch.to(device)
                 for j, k in pairs:
                     key = f"{j},{k}"
 

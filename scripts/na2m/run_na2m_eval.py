@@ -59,12 +59,13 @@ def _build_model(config, num_features: int, feature_meta) -> NA2M:
 
 def _predict(model: NA2M, loader: DataLoader) -> torch.Tensor:
     model.eval()
+    device = next(model.parameters()).device
     all_logits = []
     with torch.no_grad():
         for X_batch, _, _ in loader:
-            logits, _ = model(X_batch)
+            logits, _ = model(X_batch.to(device))
             all_logits.append(logits)
-    return torch.cat(all_logits)
+    return torch.cat(all_logits).cpu()
 
 
 def _ensemble(run_dirs: list) -> torch.Tensor:

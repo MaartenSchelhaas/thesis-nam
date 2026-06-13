@@ -26,9 +26,10 @@ def fast_screen(main_model: NA2M, X: np.ndarray, y: np.ndarray, task: str) -> li
     if not isinstance(y, np.ndarray):
         y = np.asarray(y)
 
+    device = next(main_model.parameters()).device
     main_model.eval()
     with torch.no_grad():
-        logits, _ = main_model(torch.as_tensor(X, dtype=torch.float32))
+        logits, _ = main_model(torch.as_tensor(X, dtype=torch.float32).to(device))
         init_score = logits.squeeze(-1).cpu().numpy()
 
     objective = "log_loss" if task == "classification" else "rmse"
