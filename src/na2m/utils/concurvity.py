@@ -7,7 +7,7 @@ center every column over THIS sample), so callers can pass raw vectors.
 
 import numpy as np
 
-TermId = tuple[str, int] | tuple[str, int, int]  # ("main", j) or ("inter", j, k)
+SubnetId = tuple[str, int] | tuple[str, int, int]  # ("main", j) or ("inter", j, k)
 
 
 def concurvity_adjr2(target_vec: np.ndarray, basis_vecs: np.ndarray) -> float:
@@ -45,23 +45,23 @@ def concurvity_adjr2(target_vec: np.ndarray, basis_vecs: np.ndarray) -> float:
     return float(adj_r2)
 
 
-def concurvity_score(term_id: TermId, term_vectors: dict[TermId, np.ndarray]) -> float:
-    """Concurvity of one term against all other terms.
+def concurvity_score(subnet_id: SubnetId, subnet_vectors: dict[SubnetId, np.ndarray]) -> float:
+    """Concurvity of one subnet against all other subnets.
 
     Convenience wrapper for the post-hoc diagnostic in the reducer, which
-    works from a {term_id: output_vector} stored dict. The Stage-2 gate calls
+    works from a {subnet_id: output_vector} dict. The Stage-2 gate calls
     concurvity_adjr2 directly since it already has the vectors split out in memory.
 
     Args:
-        term_id: Key of the term under test.
-        term_vectors: All subnet vecotrs, Dict mapping every term_id to its (N,) output vector
-            (raw, evaluated on the same sample for all terms).
+        subnet_id: Key of the subnet under test.
+        subnet_vectors: Dict mapping every subnet_id to its (N,) output vector
+            (raw, evaluated on the same sample for all subnets).
 
     Returns:
-        Adjusted R² of term_id regressed on all other terms.
+        Adjusted R² of subnet_id regressed on all other subnets.
     """
-    target = term_vectors[term_id]
-    other_vecs = [v for t, v in term_vectors.items() if t != term_id]
+    target = subnet_vectors[subnet_id]
+    other_vecs = [v for sid, v in subnet_vectors.items() if sid != subnet_id]
     N = target.flatten().shape[0]
     basis = np.column_stack(other_vecs) if other_vecs else np.empty((N, 0))
     return concurvity_adjr2(target, basis)
