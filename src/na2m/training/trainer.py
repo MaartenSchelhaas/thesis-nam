@@ -18,20 +18,54 @@ from na2m.models.na2m import NA2M
 class Trainer(NAMTrainer):
     """NAM Trainer extended with the marginal-clarity penalty for NA2M stages 2 and 3."""
 
-    def __init__(self, *args, clarity_lambda: float = 0.0, **kwargs):
+    def __init__(
+        self,
+        model: NA2M,
+        lr: float,
+        decay_rate: float,
+        output_regularization: float,
+        l2_regularization: float,
+        task: str,
+        num_epochs: int,
+        patience: int,
+        val_check_interval: int,
+        run_dir: str | None = None,
+        params=None,
+        clarity_lambda: float = 0.0,
+    ):
         """Initialise the NA2M Trainer.
 
-        All arguments are forwarded to the NAM Trainer. The only addition is
-        clarity_lambda, which scales the marginal-clarity penalty in _train_epoch.
+        All arguments except clarity_lambda are forwarded to the NAM Trainer.
 
         Args:
-            *args: Positional arguments forwarded to NAMTrainer.__init__.
+            model: NA2M instance to train.
+            lr: Initial Adam learning rate.
+            decay_rate: Multiplicative LR decay applied every epoch (StepLR gamma).
+            output_regularization: Coefficient for the feature output penalty term.
+            l2_regularization: Coefficient for L2 weight decay.
+            task: 'classification' or 'regression'.
+            num_epochs: Maximum number of training epochs.
+            patience: Early stopping patience (epochs without improvement).
+            val_check_interval: Validate every N epochs.
+            run_dir: Directory for checkpoints (optional).
+            params: Parameter subset to optimise; defaults to model.parameters().
             clarity_lambda: Coefficient for the marginal-clarity penalty.
                             0.0 (default) disables it — correct for Stage 1.
                             Stages 2 and 3 pass hp.clarity_lambda.
-            **kwargs: Keyword arguments forwarded to NAMTrainer.__init__.
         """
-        super().__init__(*args, **kwargs)
+        super().__init__(
+            model=model,  # type: ignore
+            lr=lr,
+            decay_rate=decay_rate,
+            output_regularization=output_regularization,
+            l2_regularization=l2_regularization,
+            task=task,
+            num_epochs=num_epochs,
+            patience=patience,
+            val_check_interval=val_check_interval,
+            run_dir=run_dir,
+            params=params,
+        )
         self.model: NA2M
         self.clarity_lambda = clarity_lambda
 

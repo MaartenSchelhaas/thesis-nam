@@ -69,8 +69,10 @@ def main():
                     B → with_interactions=True,  with_concurvity_filter=False
                     C → with_interactions=True,  with_concurvity_filter=True
                   · skip if measures for (arm, fold, seed) already exist.
-                  · build a fresh NA2M; fit_na2m(..., fold=fold, <arm flags>);
-                    load_best; eval; extract_measures; save measures.
+                  · set_seed(seed) → build a fresh NA2M (init is now seeded)
+                    → fit_na2m(model, train_loader, val_loader, pool_loader, hp, <arm flags>)
+                    (fit_na2m does NOT seed — caller owns reproducibility).
+                  · extract_measures; save measures.
                   · let the model go out of scope (no model held across arms).
     """
     parser = argparse.ArgumentParser()

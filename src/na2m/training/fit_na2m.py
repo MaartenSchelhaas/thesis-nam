@@ -36,28 +36,39 @@ HARD CONSTRAINTS honoured here:
     - NO per-removal re-fine-tune exists anywhere. The model fine-tunes once
       (Stage 3) for both arms. (See the removed-stage flag at the bottom.)
 """
+from na2m.models.na2m import NA2M
+from na2m.training.trainer import Trainer
+from na2m.utils.config import NA2MConfig
+import torch
+from torch.utils.data import DataLoader
 
 
 def fit_na2m(
-    model,
-    X_pool,
-    y_pool,
-    hp,
-    seed,
+    model: NA2M,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    pool_loader: DataLoader,
+    config: NA2MConfig,
     *,
-    fold: int,
     with_interactions: bool,
     with_concurvity_filter: bool,
 ) -> dict:
     """Run the staged NA2M training pipeline for one arm on one (fold, seed).
 
-    Args:
-        model: Freshly initialised NA2M (interactions empty at entry).
-        X_pool: The fold's 80% train pool features.
-        y_pool: The fold's 80% train pool targets.
-        hp: Hyperparameters for this fold (model + training settings).
-        seed: Reproducibility seed for this replicate (init + optimization ONLY).
-        fold: Fold index — keys the internal train/val split (see split contract).
+    Reproducibility contract (caller's responsibility, NOT this function's):
+        - Set the RNG seed (torch, numpy, random) BEFORE creating the model and
+          calling fit_na2m. This covers weight initialization and optimization
+          stochasticity in one shot.
+        - Build the train/val/pool loaders once per fold (keyed off fold, not
+          seed) and pass them in. This function never re-splits or re-seeds.
+
+    Args:   
+        model: Freshly initialised NA2M with the seed already applied (interactions
+               empty at entry).
+        train_loader: Internal training split loader (fold-keyed, shared across seeds).
+        val_loader: Internal validation split loader (fold-keyed, shared across seeds).
+        pool_loader: Full 80% pool loader — reference sample for centering.
+        config: NA2MConfig with model + training hyperparameters.
         with_interactions: If False → arm A (stage1 only).
         with_concurvity_filter: If True → arm C (concurvity gate ON in stage 2);
             if False → arm B. Has NO effect when with_interactions is False.
@@ -65,42 +76,58 @@ def fit_na2m(
     Returns:
         dict with:
             "model": the trained NA2M (best weights restored, eval mode),
-            "active_pairs": model.active_pairs()  (the final S2 selection set —
-                consumed per-seed by the Jaccard / common-interaction eval).
+            "active_pairs": model.active_interaction_pairs() (the final S2
+                selection set — consumed per-seed by the Jaccard eval).
 
     TODO:
-        - Seed init+optimization RNGs from `seed` (NOT the data split).
-        - Internal train/val split of the 80% pool keyed off `fold`/hp.fold_seed
-          (deterministic across seeds): build pool_train / pool_val loaders.
-        - stage1_main(model, train_loader, val_loader, X_pool, hp).
-        - If not with_interactions: restore best, eval(), return arm-A result
-          (active_pairs == []).
         - stage2_select(..., with_concurvity_filter=with_concurvity_filter).
         - stage3_finetune(...)   # the SINGLE fine-tune, both arms.
-        - Restore best weights, set eval(), assemble and return the result dict.
-        - NOTE: no fine_tune_pass_count is returned — it is always 1 now and thus
-          uninformative; the eval reads term count from active_pairs() instead.
+        - model.eval(); assemble and return the result dict.
     """
+    stage1_main(model, train_loader, val_loader, pool_loader, config)
+
+    if not with_interactions:
+        model.eval()
+        return {
+            "model": model,
+            "active_pairs": model.active_interaction_pairs(),  # []
+        }
+
     raise NotImplementedError
 
 
-def stage1_main(model, train_loader, val_loader, X_pool, hp) -> None:
-    """Train the main bank (Trainer over main params), restore best, then center.
+def stage1_main(model: NA2M,
+                train_loader: DataLoader,
+                val_loader: DataLoader,
+                pool_loader: DataLoader,
+                config: NA2MConfig) -> None:
+    """Train the main bank (Trainer over all params), restore best, then center.
+
+    clarity_lambda is 0.0 here — no interactions exist yet so the penalty is a no-op.
 
     Args:
-        model: NA2M instance.
+        model: NA2M instance (interactions empty at entry).
         train_loader: Internal training split loader (fold-keyed).
         val_loader: Internal validation split loader (fold-keyed).
-        X_pool: 80% pool features — the reference sample for centering.
-        hp: Hyperparameters.
-        # stage-1 Trainer: clarity_lambda defaults to 0.0 (no interactions exist yet).
-
-    TODO:
-        - Trainer over model.parameters() (only mains + bias exist); train; load_best.
-        - _bias trains fine here (mains-only); no need to freeze it.
-        - model.center_main_effects(X_pool)   # fold per-subnet pool mean into _bias.
+        pool_loader: Full 80% pool loader — reference sample for centering.
+        config: NA2MConfig with training hyperparameters.
     """
-    raise NotImplementedError
+    stage_1_trainer = Trainer(
+        model=model,
+        lr=config.lr,
+        decay_rate=config.decay_rate,
+        output_regularization=config.output_regularization,
+        l2_regularization=config.l2_regularization,
+        task=config.task,
+        num_epochs=config.num_epochs,
+        patience=config.patience,
+        val_check_interval=config.val_check_interval,
+        clarity_lambda=0.0,
+    )
+    stage_1_trainer.train(train_loader, val_loader)
+    stage_1_trainer.load_best()
+    model.center_main_effects(pool_loader)
+
 
 
 def stage2_select(model, train_loader, val_loader, X_pool, y_pool, hp, *, with_concurvity_filter: bool) -> None:

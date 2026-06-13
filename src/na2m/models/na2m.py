@@ -467,7 +467,7 @@ class NA2M(nn.Module):
 
 
     # ------------------------------------------------------------------
-    # GAMI-Net marginal-clarity penalty (NOT YET wired — Stage 3 gap)
+    # GAMI-Net marginal-clarity penalty
     # ------------------------------------------------------------------
 
     def clarity_loss(self, x: torch.Tensor) -> torch.Tensor:
