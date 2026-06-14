@@ -41,7 +41,7 @@ from na2m.training.trainer import Trainer
 from na2m.utils.config import NA2MConfig
 from na2m.selection.policy import SelectionPolicy, NoGate, ConcurvityGate
 from na2m.selection.fast import fast_screen
-from nam.data.dataset import NAMDataset
+from na2m.data.dataset import NAMDataset
 from typing import cast
 import numpy as np
 import torch

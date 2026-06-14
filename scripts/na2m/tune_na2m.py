@@ -25,8 +25,8 @@ from na2m.data.data_utils import load_compas, preprocess, split
 from na2m.models.na2m import NA2M
 from na2m.training.fit_na2m import fit_na2m
 from na2m.utils.config import NA2MConfig, load_na2m_search_config
-from nam.data.dataset import NAMDataset
-from nam.training.metrics import auroc
+from na2m.data.dataset import NAMDataset
+from na2m.training.metrics import auroc
 
 
 def suggest_hyperparams(

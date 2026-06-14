@@ -37,8 +37,8 @@ from na2m.data.data_utils import load_compas, preprocess
 from na2m.models.na2m import NA2M
 from na2m.training.fit_na2m import fit_na2m
 from na2m.utils.config import load_na2m_config, load_na2m_search_config
-from nam.data.dataset import NAMDataset
-from nam.training.metrics import auroc
+from na2m.data.dataset import NAMDataset
+from na2m.training.metrics import auroc
 from scripts.na2m.tune_na2m import tune_fold
 from scripts.na2m.tune_clarity import load_clarity_search_config, tune_clarity_fold
 

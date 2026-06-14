@@ -15,7 +15,7 @@ Reference: original_neural_additive_models/models.py FeatureNN
 
 import torch
 import torch.nn as nn
-from nam.models.activation import ExU, LinReLU
+from na2m.models.activation import ExU, LinReLU
 
 
 class FeatureNN(nn.Module):
