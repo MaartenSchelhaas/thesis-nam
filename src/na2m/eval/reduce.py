@@ -1,8 +1,9 @@
 """
 reduce — cheap, re-runnable, model-agnostic metric computation from stored measures.
 
-Reads the measure files written by run.py (never touches a live model) and
-computes the headline evaluation metrics. Because measures are stored RAW,
+Reads the measure files written by the evaluator script
+(scripts/na2m/run_na2m_eval.py) — never touches a live model — and computes the
+headline evaluation metrics. Because measures are stored RAW,
 centering happens HERE, per metric, over that metric's own evaluation set.
 
 HARD CONSTRAINTS:

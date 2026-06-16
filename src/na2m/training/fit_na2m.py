@@ -58,6 +58,7 @@ def fit_na2m(
     *,
     with_interactions: bool,
     with_concurvity_filter: bool,
+    mains_pretrained: bool = False,
     trial=None,
 ) -> dict:
     """Run the staged NA2M training pipeline for one arm on one (fold, seed).
@@ -79,19 +80,36 @@ def fit_na2m(
         with_interactions: If False → arm A (stage1 only).
         with_concurvity_filter: If True → arm C (concurvity gate ON in stage 2);
             if False → arm B. Has NO effect when with_interactions is False.
+        mains_pretrained: If False (default) → train the mains first (stage1_main),
+            then continue. If True → SKIP stage 1 and assume `model` ALREADY has its
+            main effects trained + centered; only the interaction stages run.
+
+            The mains are deterministic given (fold, seed), so train them ONCE and
+            branch several arms off the same mains model without retraining:
+
+                set_seed(seed); mains = build_model()
+                fit_na2m(mains, ..., with_interactions=False)             # arm A (trains mains)
+                model_b = copy.deepcopy(mains)
+                fit_na2m(model_b, ..., with_interactions=True,
+                         with_concurvity_filter=False, mains_pretrained=True)   # arm B
+                model_c = copy.deepcopy(mains)
+                fit_na2m(model_c, ..., with_interactions=True,
+                         with_concurvity_filter=True,  mains_pretrained=True)   # arm C
+
+            Deepcopy at the CALL SITE: fit_na2m mutates `model` in place, so pass a
+            distinct copy per arm or arm C would start from arm B's fine-tuned weights.
+            A future method (a different gate/policy) plugs in the same way.
+        trial: Optuna trial for Stage-1 pruning. Only used when mains_pretrained is
+            False (Stage 1 is the only pruned stage); ignored otherwise.
 
     Returns:
         dict with:
             "model": the trained NA2M (best weights restored, eval mode),
             "active_pairs": model.active_interaction_pairs() (the final S2
                 selection set — consumed per-seed by the Jaccard eval).
-
-    TODO:
-        - stage2_select(..., with_concurvity_filter=with_concurvity_filter).
-        - stage3_finetune(...)   # the SINGLE fine-tune, both arms.
-        - model.eval(); assemble and return the result dict.
     """
-    stage1_main(model, train_loader, val_loader, pool_loader, config, trial=trial)
+    if not mains_pretrained:
+        stage1_main(model, train_loader, val_loader, pool_loader, config, trial=trial)
 
     if not with_interactions:
         model.eval()
