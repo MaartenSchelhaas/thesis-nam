@@ -360,17 +360,17 @@ class NA2M(nn.Module):
     # ------------------------------------------------------------------
     # Per-term evaluation
     # ------------------------------------------------------------------
-    def iter_terms(self):
-        """Yield (term_id, fn) for every term: mains first, then active interactions.
+    def iter_subnets(self):
+        """Yield (subnet_id, fn) for every subnet: mains first, then active interactions.
 
-        term_id is ("main", j) or ("inter", j, k). `fn` evaluates that ONE term on
+        subnet_id is ("main", j) or ("inter", j, k). `fn` evaluates that ONE subnet on
         arbitrary inputs (1-col for main, 2-col for inter), returning CENTERED
         (deployment) outputs. This is the path for anything that wants the model's
         own pool-centering. The EVAL metrics do NOT use this — they re-center over
-        their own sample, so they call raw_term_output instead.
+        their own sample, so they call raw_subnet_output instead.
 
         Yields:
-            (term_id, fn) tuples.
+            (subnet_id, fn) tuples.
 
         TODO:
             - main fn: raw_main(j, col) - main_centers[j]   (late-bind j=j)
@@ -379,34 +379,41 @@ class NA2M(nn.Module):
         """
         raise NotImplementedError
 
-    def raw_term_output(self, term_id, x: torch.Tensor) -> torch.Tensor:
+    def raw_subnet_output(self, subnet_id, x: torch.Tensor) -> torch.Tensor:
         """Evaluate ONE subnet on an arbitrary input matrix; return its RAW output.
 
         The accessor the evaluation harness is built around: pass any input matrix
-        (e.g. a held-out test fold the subnet never trained on) and get that term's
+        (e.g. a held-out test fold the subnet never trained on) and get that subnet's
         UNCENTERED output. Centering is deliberately deferred to the consumer,
         because the correct reference sample differs per metric and is NOT the
         model's deployment (pool) centering:
             * stability  → reducer re-centers over the TEST fold.
             * concurvity → the OLS intercept centers over the POOL.
         Do NOT subtract main_centers / inter_centers here. (For the pool-centered
-        deployment value, use iter_terms / main_outputs instead.)
+        deployment value, use iter_subnets / main_outputs instead.)
 
         Args:
-            term_id: ("main", j) or ("inter", j, k).
+            subnet_id: ("main", j) or ("inter", j, k).
             x: Input matrix, shape (batch_size, num_features). Full-width rows;
-               this method selects the column(s) the term needs.
+               this method selects the column(s) the subnet needs.
 
         Returns:
             Raw output vector, shape (batch_size, 1).
-
-        TODO:
-            - ("main", j):    raw = main_nns[j](x[:, j:j+1])            # NO center
-            - ("inter", j, k): cols = encode + stack columns j, k as the subnet was
-                               built; raw = inter_nns[f"{j},{k}"](cols)  # NO center
-            - Reuse _encode_col so categorical handling matches construction.
         """
-        raise NotImplementedError
+        kind = subnet_id[0]
+
+        if kind == "main":
+            j = subnet_id[1]
+            feature_input = x[:, j:j + 1]          # (batch, 1), same as main_outputs
+            return self.main_nns[j](feature_input)
+
+        # kind == "inter"
+        j, k = subnet_id[1], subnet_id[2]
+        key = f"{j},{k}"
+        col_j = self._encode_col(x, j)             # (batch, 1) or (batch, n_levels_j)
+        col_k = self._encode_col(x, k)             # (batch, 1) or (batch, n_levels_k)
+        feature_input = torch.cat([col_j, col_k], dim=1)
+        return self.inter_nns[key](feature_input)
 
     # ------------------------------------------------------------------
     # Forward

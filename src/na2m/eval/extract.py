@@ -9,59 +9,123 @@ HARD CONSTRAINTS:
     - PRECONDITION: model is in eval mode AND best weights have been restored.
     - Store RAW term outputs — never pre-centered. Centering happens per-metric
       in the reducer (over whichever evaluation set that metric uses).
-    - Key everything by term_id, never positionally.
+    - Key everything by subnet_id, never positionally.
     - Two distinct evaluation sets, stored separately and NOT interchangeable:
-        * term_vectors_pool : ALL terms on X_pool  -> consumed by CONCURVITY
+        * subnet_vectors_pool : ALL terms on X_pool  -> consumed by CONCURVITY
           (Kovács observed-concurvity index is a property of the fit on the
            training data the model saw).
-        * term_vectors_test : ALL terms on X_test  -> consumed by STABILITY
+        * subnet_vectors_test : ALL terms on X_test  -> consumed by STABILITY
           (cross-seed comparison on a shared, held-out set drawn from the data
            distribution; density is intrinsic to the sample, no grid, no weights).
+    - logits and subnet_vectors_test are DIFFERENT extractions that share X_test:
+      term vectors are per-term + RAW (stability); logits are the summed forward
+      pass (accuracy). Neither is recoverable from the other.
+
+The Measures TypedDict below is the single authoritative schema for what lands in
+measures.pt — produced here, completed by scripts/na2m/model_runner._extract_and_save
+(which adds y_test), and consumed by src/na2m/eval/reduce.py.
 """
 
+from typing import TypedDict
 
-def extract_measures(model, X_pool, X_test, grids, feature_meta, *, include_inter_curves: bool = False) -> dict:
-    """Extract the durable measures from a trained NA2M.
+import numpy as np
+
+# A subnet identifier. Mirrors concurvity.SubnetId; defined here so `eval` does not
+# depend on `utils` for a type alias.
+SubnetId = tuple[str, int] | tuple[str, int, int]  # ("main", j) | ("inter", j, k)
+
+
+class MainCurve(TypedDict):
+    """1-D shape curve for a main effect (the Agarwal per-run line)."""
+    inputs: np.ndarray   # real-unit axis; (G,) continuous, (n_levels,) categorical
+    outputs: np.ndarray  # centered curve, same length as inputs
+
+
+class InterCurve(TypedDict):
+    """2-D shape surface for an interaction (heatmap; opt-in, plotting only)."""
+    input1: np.ndarray   # axis for feature j, (G_j,)
+    input2: np.ndarray   # axis for feature k, (G_k,)
+    outputs: np.ndarray  # (G_j, G_k) surface from the meshgrid evaluation
+
+
+class Density(TypedDict, total=False):
+    """Marginal data density of ONE main feature, for the shape-plot bands.
+
+    Continuous → {edges, scores} (histogram); categorical → {levels, scores}.
+    """
+    edges: np.ndarray    # continuous: bin edges, (B+1,)
+    levels: np.ndarray   # categorical: level values, (n_levels,)
+    scores: np.ndarray   # density/frequency, (B,) continuous or (n_levels,) cat
+
+
+class Measures(TypedDict):
+    """The on-disk schema of one model's measures.pt.
+
+    Every reduce.py metric is a pure function of these fields. subnet_vectors_pool /
+    subnet_vectors_test share the SAME keys. y_test is the ONLY field not populated
+    here — model_runner._extract_and_save adds it before saving.
+    """
+    subnet_vectors_pool: dict[SubnetId, np.ndarray]  # per subnet on X_pool -> concurvity
+    subnet_vectors_test: dict[SubnetId, np.ndarray]  # per subnet on X_test -> stability
+    logits: np.ndarray                               # (N_test,) forward()[0] on X_test
+    pairs: list[tuple[int, int]]                     # active interactions; [] for arm A
+    curves: dict[SubnetId, MainCurve | InterCurve]   # shape plots (mains always)
+    density: dict[int, Density]                      # per MAIN feature index, from X_pool
+    y_test: np.ndarray                               # (N_test,) labels — added downstream
+
+
+def extract_measures(
+    model,
+    X_pool: np.ndarray,
+    X_test: np.ndarray,
+    grids: dict[int, np.ndarray],
+    feature_meta,
+    *,
+    include_inter_curves: bool = False,
+) -> Measures:
+    """Extract the durable measures from a trained NA2M (everything but y_test).
 
     Args:
         model: Trained NA2M, eval mode, best weights restored.
-        X_pool: The fold's 80% train pool. Concurvity term vectors are evaluated here.
-        X_test: The fold's test slice. Stability term vectors AND logits are evaluated here.
+        X_pool: The fold's 80% train pool. Concurvity term vectors AND the density
+            bands are computed here (property of the fit / data the model saw).
+        X_test: The fold's test slice. Stability term vectors AND logits here.
         grids: Per-feature evaluation grids (from make_grid), keyed by feature index.
-               Used ONLY for plotting curves, never for the stability metric.
-        feature_meta: Per-feature metadata (type/levels).
-        include_inter_curves: If True, also extract interaction shape curves
-            (off by default — plotting aid only).
+            Shared & deterministic across runs so curves overlay. PLOTTING ONLY.
+        feature_meta: Per-feature metadata (type / n_levels / inverse-transform).
+        include_inter_curves: If True, also extract the 2-D interaction surfaces
+            (off by default — heavier, plotting aid only).
 
     Returns:
-        dict with:
-            "curves": term_id -> raw output on the grid (PLOTTING ONLY). Main terms
-                      always; interaction curves only if include_inter_curves.
-                      Numerical → (G,), categorical → (n_levels,).
-            "term_vectors_pool": term_id -> raw output on FULL X_pool, ALL terms
-                      (mains + active interactions). RAW. For CONCURVITY.
-            "term_vectors_test": term_id -> raw output on FULL X_test, ALL terms
-                      (mains + active interactions). RAW. For STABILITY.
-            "logits": model.predict(X_test) → (N_test,).
-            "pairs": model.active_pairs().
+        A Measures dict WITHOUT y_test (the caller adds it). See the Measures
+        TypedDict for the full schema and per-field shapes.
 
     TODO:
-        - assert model.training is False; (document) best weights already restored.
-        - Term set = [("main", j) for j in range(num_features)] + active_pairs().
+        - assert model.training is False  (best weights already restored upstream).
+        - Term set = [("main", j) for j in range(model.num_features)]
+                     + [("inter", j, k) for (j, k) in model.active_interaction_pairs()].
         - Under torch.no_grad():
-            * curves (plotting): evaluate each main term on its grid (interaction
-              curves only if include_inter_curves). Plotting may use the centered
-              iter_terms path — curves are not fed to a metric.
-            * term_vectors_pool: model.raw_term_output(tid, X_pool) for every term,
-              store RAW. For CONCURVITY.
-            * term_vectors_test: model.raw_term_output(tid, X_test) for every term,
-              store RAW. For STABILITY. SAME term_id keys as the pool dict.
-            * logits: model.predict(X_test).
-            * pairs: model.active_pairs().
-        - Store RAW (uncentered) outputs via raw_term_output — NOT the centered
-          iter_terms values and NOT the model's deployment centering — so the
-          reducer can re-center per metric over the correct evaluation set
+          * subnet_vectors_pool[sid] = model.raw_subnet_output(sid, X_pool) for every
+            subnet, stored RAW (numpy, 1-D). For CONCURVITY.
+          * subnet_vectors_test[sid] = model.raw_subnet_output(sid, X_test) for every
+            subnet, stored RAW (numpy, 1-D). SAME keys as pool. For STABILITY.
+          * logits = model(X_test)[0]  (eval mode → dropout off → deterministic).
+          * pairs = model.active_interaction_pairs().
+          * curves: via iter_subnets() fns (CENTERED deployment path — these feed a
+            plot, not a metric):
+              - ("main", j):  evaluate on grids[j]  -> MainCurve {inputs, outputs}.
+                inputs = grids[j] in real units (from make_grid's inverse-transform).
+              - ("inter", j, k): ONLY if include_inter_curves. meshgrid(grids[j],
+                grids[k]); evaluate the interaction fn on the flattened (G_j*G_k, 2)
+                input; reshape to (G_j, G_k) -> InterCurve {input1, input2, outputs}.
+          * density: per MAIN feature j from X_pool, in real units:
+              - continuous: np.histogram(real_values_j, bins=...) -> {edges, scores}.
+              - categorical: per-level frequency over n_levels      -> {levels, scores}.
+            Keyed by feature INDEX (not term_id) — reused on main plots and on the
+            margins of interaction plots.
+        - RAW (uncentered) term vectors via raw_subnet_output — NOT iter_subnets, NOT the
+          model's deployment centering — so the reducer re-centers per metric
           (test-fold mean for stability, OLS intercept for concurvity).
-        - Key all dicts by term_id; convert tensors to numpy for persistence.
+        - Convert all tensors to numpy for persistence; key subnet dicts by subnet_id.
     """
     raise NotImplementedError
