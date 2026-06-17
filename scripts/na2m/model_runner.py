@@ -113,16 +113,29 @@ def _extract_and_save(
         config: NA2MConfig (grid_size).
         out_dir: This arm's output dir.
 
-    TODO:
-        - out_dir.mkdir(parents=True, exist_ok=True)
-        - grids = {j: make_grid(feature_meta, j, config.grid_size)
-                   for j in range(model.num_features)}
-        - measures = extract_measures(model, X_pool, X_test, grids, feature_meta)
-        - measures["y_test"] = y_test           # accuracy_summary needs test labels
-        - torch.save(measures, out_dir / "measures.pt")
-        - (out_dir / "done").touch()            # LAST — marks this arm complete
     """
-    raise NotImplementedError
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Ensure eval mode regardless of what state the caller left the model in.
+    # fit_na2m already does this, but _extract_and_save owns this precondition.
+    model.eval()
+
+    # Grids are used only for shape-plot curves, which are not yet implemented.
+    # Pass an empty dict so extract_measures receives the correct type.
+    grids = {}
+
+    # Extract all measures from the live model. This returns everything except y_test.
+    measures = extract_measures(model, X_pool, X_test, grids, feature_meta)
+
+    # y_test lives here rather than in extract_measures because the extractor is
+    # model-only — it has no knowledge of what the correct labels are.
+    measures["y_test"] = y_test
+
+    torch.save(measures, out_dir / "measures.pt")
+
+    # Write the done sentinel LAST. If we crash between torch.save and here the
+    # arm stays un-flagged and the next run will redo it cleanly.
+    (out_dir / "done").touch()
 
 
 def run_main_effects(
@@ -170,6 +183,7 @@ def run_main_effects(
     torch.save(model.state_dict(), out_dir / "model.pt")
 
     # Arm A == the mains model: extract + store its measures, flag done.
+    model.eval()
     X_pool = np.concatenate([X_train, X_val])
     _extract_and_save(model, X_pool, X_test, y_test, feature_meta, config, out_dir)
     return model
@@ -213,7 +227,7 @@ def run_arm(
     *,
     with_interactions: bool,
     with_concurvity_filter: bool,
-) -> dict:
+) -> None:
     """Run ONE arm by continuing from a persisted mains checkpoint, then extract.
 
     Loads the mains from disk, deepcopies (so the checkpoint on disk is never
@@ -232,16 +246,13 @@ def run_arm(
         out_dir: This arm's output dir; receives measures.pt, done.
         with_interactions: False → arm A; True → arm B/C.
         with_concurvity_filter: False → arm B (NoGate); True → arm C (gate on).
-
-    Returns:
-        fit_na2m's result dict: {"model": NA2M, "active_pairs": [...]}.
     """
     set_seed(seed)
     mains_model = load_main_effects(config, feature_meta, X_train.shape[1], mains_model_path)
     model = copy.deepcopy(mains_model)
     train_loader, val_loader, pool_loader = _build_loaders(config, X_train, y_train, X_val, y_val)
 
-    result = fit_na2m(
+    fit_na2m(
         model,
         train_loader,
         val_loader,
@@ -252,9 +263,9 @@ def run_arm(
         mains_pretrained=True,
     )
 
+    model.eval()
     X_pool = np.concatenate([X_train, X_val])
-    _extract_and_save(result["model"], X_pool, X_test, y_test, feature_meta, config, out_dir)
-    return result
+    _extract_and_save(model, X_pool, X_test, y_test, feature_meta, config, out_dir)
 
 
 if __name__ == "__main__":

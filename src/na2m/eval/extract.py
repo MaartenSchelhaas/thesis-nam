@@ -29,6 +29,7 @@ measures.pt — produced here, completed by scripts/na2m/model_runner._extract_a
 from typing import TypedDict
 
 import numpy as np
+import torch
 
 # A subnet identifier. Mirrors concurvity.SubnetId; defined here so `eval` does not
 # depend on `utils` for a type alias.
@@ -82,7 +83,7 @@ def extract_measures(
     feature_meta,
     *,
     include_inter_curves: bool = False,
-) -> Measures:
+) -> dict:
     """Extract the durable measures from a trained NA2M (everything but y_test).
 
     Args:
@@ -128,4 +129,53 @@ def extract_measures(
           (test-fold mean for stability, OLS intercept for concurvity).
         - Convert all tensors to numpy for persistence; key subnet dicts by subnet_id.
     """
-    raise NotImplementedError
+    assert not model.training, "model must be in eval mode before extracting measures"
+
+    # Build the full list of subnet IDs: all main effects, then active interactions.
+    # For arm A (mains only), active_interaction_pairs() returns [] so inter_ids is empty.
+    main_ids = [("main", j) for j in range(model.num_features)]
+    inter_ids = [("inter", j, k) for j, k in model.active_interaction_pairs()]
+    all_subnet_ids = main_ids + inter_ids
+
+    # Move the input arrays to the same device the model lives on.
+    device = model._bias.device
+    X_pool_tensor = torch.from_numpy(X_pool).to(device)
+    X_test_tensor = torch.from_numpy(X_test).to(device)
+
+    # Extract raw per-subnet output vectors for BOTH evaluation sets.
+    # We call raw_subnet_output once per subnet per set and immediately convert to numpy.
+    # RAW means no centering — the reducer applies the correct centering per metric:
+    #   subnet_vectors_pool -> concurvity (OLS intercept centers over the pool)
+    #   subnet_vectors_test -> stability  (test-fold mean centers over the test set)
+    subnet_vectors_pool: dict[SubnetId, np.ndarray] = {}
+    subnet_vectors_test: dict[SubnetId, np.ndarray] = {}
+
+    with torch.no_grad():
+        for subnet_id in all_subnet_ids:
+            pool_raw = model.raw_subnet_output(subnet_id, X_pool_tensor)  # (N_pool, 1)
+            subnet_vectors_pool[subnet_id] = pool_raw.squeeze(1).cpu().numpy()
+
+            test_raw = model.raw_subnet_output(subnet_id, X_test_tensor)  # (N_test, 1)
+            subnet_vectors_test[subnet_id] = test_raw.squeeze(1).cpu().numpy()
+
+        # Logits: summed forward pass on the test set (eval mode -> dropout off -> deterministic).
+        # model(x) returns (out, dropout_out); [0] is the per-sample scalar prediction.
+        # These are NOT recoverable from the per-subnet vectors because centering offsets
+        # are baked into the bias during training — don't try to reconstruct them.
+        logits_tensor = model(X_test_tensor)[0]  # (N_test,)
+        logits = logits_tensor.cpu().numpy()
+
+    # The active pair list is a plain Python list — no tensor, no no_grad needed.
+    # Empty for arm A; populated for arms B and C after the Stage-2 prune sweep.
+    pairs = model.active_interaction_pairs()
+
+    # curves and density are intentionally empty — shape plot extraction is deferred.
+    # y_test is intentionally absent — _extract_and_save adds it before torch.save.
+    return {
+        "subnet_vectors_pool": subnet_vectors_pool,
+        "subnet_vectors_test": subnet_vectors_test,
+        "logits": logits,
+        "pairs": pairs,
+        "curves": {},
+        "density": {},
+    }

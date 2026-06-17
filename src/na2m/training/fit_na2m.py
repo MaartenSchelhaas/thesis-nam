@@ -60,8 +60,10 @@ def fit_na2m(
     with_concurvity_filter: bool,
     mains_pretrained: bool = False,
     trial=None,
-) -> dict:
+) -> None:
     """Run the staged NA2M training pipeline for one arm on one (fold, seed).
+
+    Mutates `model` in place — best weights restored, eval mode on return.
 
     Reproducibility contract (caller's responsibility, NOT this function's):
         - Set the RNG seed (torch, numpy, random) BEFORE creating the model and
@@ -70,7 +72,7 @@ def fit_na2m(
         - Build the train/val/pool loaders once per fold (keyed off fold, not
           seed) and pass them in. This function never re-splits or re-seeds.
 
-    Args:   
+    Args:
         model: Freshly initialised NA2M with the seed already applied (interactions
                empty at entry).
         train_loader: Internal training split loader (fold-keyed, shared across seeds).
@@ -101,22 +103,13 @@ def fit_na2m(
             A future method (a different gate/policy) plugs in the same way.
         trial: Optuna trial for Stage-1 pruning. Only used when mains_pretrained is
             False (Stage 1 is the only pruned stage); ignored otherwise.
-
-    Returns:
-        dict with:
-            "model": the trained NA2M (best weights restored, eval mode),
-            "active_pairs": model.active_interaction_pairs() (the final S2
-                selection set — consumed per-seed by the Jaccard eval).
     """
     if not mains_pretrained:
         stage1_main(model, train_loader, val_loader, pool_loader, config, trial=trial)
 
     if not with_interactions:
         model.eval()
-        return {
-            "model": model,
-            "active_pairs": model.active_interaction_pairs(),  # []
-        }
+        return
 
     policy: SelectionPolicy = (
         ConcurvityGate(threshold=config.concurvity_threshold)
@@ -128,10 +121,6 @@ def fit_na2m(
     stage3_finetune(model, train_loader, val_loader, pool_loader, config)
 
     model.eval()
-    return {
-        "model": model,
-        "active_pairs": model.active_interaction_pairs(),
-    }
 
 
 def stage1_main(
