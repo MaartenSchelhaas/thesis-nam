@@ -14,7 +14,14 @@ dependencies = [
     "matplotlib>=3.7",
     "optuna>=3.0",
     "pyyaml>=6.0",
+    "interpret>=0.5",
 ]
+
+[tool.hatch.build.targets.wheel]
+# src layout with two top-level packages: the frozen NAM reproduction (`nam`)
+# and the NA2M extension (`na2m`). Both must be packaged explicitly because the
+# project name ("nam") only auto-discovers the matching package.
+packages = ["src/nam", "src/na2m"]
 
 [project.optional-dependencies]
 dev = [

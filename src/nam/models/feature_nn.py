@@ -28,12 +28,17 @@ class FeatureNN(nn.Module):
     Single-feature subnet: maps scalar input x_i → scalar output f_i(x_i).
     """
 
+    # TODO: add moving_mean tracking (needed for marginal clarity penalty, stage 3)
+    # See GamiNet-master NAMNet.call() — same pattern as CategNet, subnet_mean
+    # tracked during training and used in NA2M.clarity_loss().
+
     def __init__(
         self,
         num_units: int = 64,
         hidden_sizes: list = [64, 32],
         dropout: float = 0.5,
         activation: str = "exu",
+        in_features: int = 1 
     ):
         """Initialize the feature model
 
@@ -44,6 +49,7 @@ class FeatureNN(nn.Module):
                                             Defaults to [64, 32]
             dropout (float, optional): Dropout probability applied after each hidden layer. Defaults to 0.5.
             activation (str, optional): 'exu' or 'relu', selects the activation layer type. Defaults to "exu".
+            in_features (int, optional): Width of the input to the first activation layer. Defaults to 1.
         """
         super().__init__()
         
@@ -52,9 +58,9 @@ class FeatureNN(nn.Module):
 
         #First layer
         if activation == "exu":
-            layers.append(ExU(in_features=1, out_features=num_units))
+            layers.append(ExU(in_features=in_features, out_features=num_units))
         elif activation == "relu":
-            layers.append(LinReLU(in_features=1, out_features=num_units))
+            layers.append(LinReLU(in_features=in_features, out_features=num_units))
         else:
             raise ValueError(f"Unknown activation '{activation}'. Use 'exu' or 'relu'.")
         layers.append(self.dropout)

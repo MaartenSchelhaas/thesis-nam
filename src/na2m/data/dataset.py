@@ -28,15 +28,15 @@ class NAMDataset(Dataset):
     """
 
     def __init__(
-            self, 
-            X: np.ndarray, 
-            y: np.ndarray, 
+            self,
+            X: np.ndarray,
+            y: np.ndarray,
             weights: np.ndarray | None = None,
             feature_meta: list | None = None):
 
         if np.isnan(y).any():
             raise ValueError("y contains NaN values — run dropna() before creating NAMDataset")
-        
+
         self.X = torch.tensor(X, dtype=torch.float32)
         self.y = torch.tensor(y, dtype=torch.float32)
         self.feature_meta = feature_meta
@@ -46,11 +46,11 @@ class NAMDataset(Dataset):
             w = torch.ones_like(self.y)
         else:
             w = torch.tensor(weights, dtype=torch.float32)
-        
+
         self.w = w
 
     def __len__(self) -> int:
         return len(self.X)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor,torch.Tensor,torch.Tensor]: 
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor,torch.Tensor,torch.Tensor]:
         return self.X[idx], self.y[idx], self.w[idx]

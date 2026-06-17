@@ -1,9 +1,15 @@
 """
-Trainer — training loop with early stopping.
+NA2M Trainer — standalone training loop with early stopping.
 
-Handles training a single NAM instance: forward pass, backpropagation,
+Handles training a single NA2M instance: forward pass, backpropagation,
 learning rate scheduling, validation, and early stopping. The best model
 state (by validation metric) is retained in memory after training.
+
+This is a full, standalone copy of the NAM Trainer (src/nam/training/trainer.py)
+so src/na2m/ has no dependency on src/nam/. The ONLY behavioural difference is
+the clarity_lambda parameter, which enables the GAMI-Net marginal-clarity penalty
+during interaction block-training (Stage 2) and joint fine-tuning (Stage 3). Set
+clarity_lambda=0.0 for Stage 1 (mains only, no interactions exist yet).
 
 Usage:
     trainer = Trainer(model=model, lr=0.001, ...)
@@ -13,27 +19,26 @@ Usage:
 
 from pathlib import Path
 import copy
-import json, shutil
 
 import torch
 from torch.utils.data import DataLoader
 
-from nam.models.nam import NAM
-from .losses import penalized_loss
-from .metrics import auroc, rmse
-from nam.utils.device import get_device
+from na2m.models.na2m import NA2M
+from na2m.training.losses import penalized_loss
+from na2m.training.metrics import auroc, rmse
+from na2m.utils.device import get_device
 
 import optuna
 
 
 class Trainer:
     """
-    Manages the training loop, validation, checkpointing, and early stopping.
+    Manages the training loop, validation, checkpointing, and early stopping for NA2M.
     """
 
     def __init__(
         self,
-        model: NAM,
+        model: NA2M,
         lr: float,
         decay_rate: float,
         output_regularization: float,
@@ -43,11 +48,12 @@ class Trainer:
         patience: int,
         val_check_interval: int,
         run_dir: str | None = None,
+        clarity_lambda: float = 0.0,
     ):
-        """Initialise the NAM Trainer.
+        """Initialise the NA2M Trainer.
 
         Args:
-            model (NAM): Already-initialised NAM instance to train.
+            model (NA2M): Already-initialised NA2M instance to train.
             lr (float): Initial Adam learning rate.
             decay_rate (float): Multiplicative LR decay applied every epoch (StepLR gamma).
             output_regularization (float): Coefficient for the feature output penalty term.
@@ -57,7 +63,10 @@ class Trainer:
             patience (int): Early stopping, stop if val metric doesn't improve for this many epochs.
             val_check_interval (int): Evaluate on validation set every N epochs.
             run_dir (Path): Directory to save checkpoints and metrics (created before passing in).
-"""
+            clarity_lambda (float): Coefficient for the marginal-clarity penalty.
+                            0.0 (default) disables it — correct for Stage 1.
+                            Stages 2 and 3 pass hp.clarity_lambda.
+        """
         self.model = model
         self.output_regularization = output_regularization
         self.l2_regularization = l2_regularization
@@ -65,8 +74,7 @@ class Trainer:
         self.num_epochs = num_epochs
         self.patience = patience
         self.val_check_interval = val_check_interval
-        #self.clarity_lambda = clarity_lambda
-
+        self.clarity_lambda = clarity_lambda
 
         if run_dir is not None:
             self.run_dir = Path(run_dir)
@@ -92,9 +100,10 @@ class Trainer:
     # ------------------------------------------------------------------
 
     def _train_epoch(self, loader: DataLoader) -> float:
-        """Run one full pass over the training set.
+        """Run one full pass over the training set, with optional clarity penalty.
 
-        Iterates all batches: forward pass → penalized loss → backward → optimizer step.
+        Iterates all batches: forward pass → penalized loss (+ clarity penalty
+        when clarity_lambda > 0) → backward → optimizer step.
 
         Args:
             loader: Training DataLoader.
@@ -105,35 +114,39 @@ class Trainer:
         self.model.train()
         epoch_loss = 0.0
         for X_batch, y_batch, weights in loader:
-            X_batch, y_batch, weights = X_batch.to(self.device), y_batch.to(self.device), weights.to(self.device)
+            X_batch, y_batch, weights = (
+                X_batch.to(self.device),
+                y_batch.to(self.device),
+                weights.to(self.device),
+            )
             self.optimizer.zero_grad()
             predictions, fnn_outputs = self.model(X_batch)
 
-            # NA2M marginal-clarity penalty (no-op when clarity_lambda == 0, e.g. the
-            # frozen NAM baseline and stage 1). hasattr guards the baseline model, which
-            # has no clarity_loss method. Uses the SAME X_batch as the prediction so the
-            # penalty is measured on the training batch, as in GAMI-Net train_interaction.
-            #if self.clarity_lambda > 0.0 and hasattr(self.model, "clarity_loss"):
-            #    loss = loss + self.clarity_lambda * self.model.clarity_loss(X_batch)
+            loss = penalized_loss(
+                logits=predictions,
+                targets=y_batch,
+                weights=weights,
+                fnn_outputs=fnn_outputs,
+                model=self.model,
+                output_regularization=self.output_regularization,
+                l2_regularization=self.l2_regularization,
+                task=self.task,
+            )
 
+            # NA2M marginal-clarity penalty (no-op when clarity_lambda == 0, e.g.
+            # stage 1). Uses the SAME X_batch as the prediction so the penalty is
+            # measured on the training batch, as in GAMI-Net train_interaction.
+            if self.clarity_lambda > 0.0 and hasattr(self.model, "clarity_loss"):
+                loss = loss + self.clarity_lambda * self.model.clarity_loss(X_batch)
 
-            loss = penalized_loss(logits=predictions,
-                                targets=y_batch,
-                                weights=weights,
-                                fnn_outputs=fnn_outputs,
-                                model = self.model,
-                                output_regularization=self.output_regularization,
-                                l2_regularization=self.l2_regularization,
-                                task = self.task)
             loss.backward()
             self.optimizer.step()
             epoch_loss += loss.item()
 
-        return epoch_loss/ len(loader)
-    
+        return epoch_loss / len(loader)
 
     def _val_epoch(self, loader: DataLoader) -> float:
-        """Calculate validation metric for this epoch. 
+        """Calculate validation metric for this epoch.
 
         Args:
             loader (DataLoader): Validation dataloader
@@ -154,7 +167,7 @@ class Trainer:
         val_predictions = torch.cat(all_predictions)
         val_targets = torch.cat(all_targets)
         return self._compute_metric(val_predictions, val_targets)
-    
+
     def _compute_metric(self, predictions: torch.Tensor, targets: torch.Tensor) -> float:
         """Compute task-appropriate validation metric.
 
@@ -169,7 +182,7 @@ class Trainer:
             return auroc(predictions, targets)
         else:
             return rmse(predictions, targets)
-        
+
     def _is_improved(self, metric: float) -> bool:
         """Check if the current validation metric is an improvement over the best so far.
 
@@ -197,7 +210,6 @@ class Trainer:
 
         torch.save(self.best_model_state,path)
 
-
     def _save_checkpoint(self, epoch: int, is_best: bool = False):
         """
         Save model + optimizer + scheduler state to disk.
@@ -208,7 +220,7 @@ class Trainer:
 
     def _log_metrics(self, epoch: int, train_loss: float, val_metric: float):
         """Append one JSON line to metrics.jsonl.
-        
+
         Not implemented for now, compas doesnt take that long.
         """
         raise NotImplementedError
@@ -234,7 +246,7 @@ class Trainer:
 
             #Run validation for every val_check_interval_epoch
             if (epoch + 1) % self.val_check_interval == 0:
-                
+
                 metric = self._val_epoch(val_loader)
 
                 #For early pruning during hyperparameter tuning.
@@ -259,7 +271,7 @@ class Trainer:
                 print(f"Epoch {epoch+1}/{self.num_epochs}| Epoch loss = {epoch_loss:.4f} | best={self.best_val_metric:.4f}")
 
             self.scheduler.step()
-        
+
     def evaluate(self, loader: DataLoader) -> float:
         """Evaluate the models performence on the input test data
 
@@ -288,15 +300,6 @@ class Trainer:
             trainer.resume('runs/.../checkpoints/epoch_50.pt')
             trainer.train(train_dataset, val_dataset)
 
-        TODO:
-            - torch.load(checkpoint_path)
-            - model.load_state_dict(checkpoint['model_state'])
-            - optimizer.load_state_dict(checkpoint['optimizer_state'])
-            - scheduler.load_state_dict(checkpoint['scheduler_state'])
-            - self.start_epoch = checkpoint['epoch'] + 1
-            - self.best_val_metric = checkpoint['best_val_metric']
-
         Not yet necessary for COMPAS.
-
         """
         raise NotImplementedError

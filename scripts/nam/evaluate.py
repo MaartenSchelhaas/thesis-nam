@@ -30,8 +30,8 @@ from nam.models.nam import NAM
 from nam.training.metrics import auroc, rmse
 from nam.utils.config import load_config, load_search_config
 from nam.utils.device import get_device
-from scripts.train import run_single, build_model
-from scripts.tune_nam import tune_fold
+from scripts.nam.train import run_single, build_model
+from scripts.nam.tune_nam import tune_fold
 
 def load_model(config: NAMConfig, checkpoint_path: Path, num_features: int) -> NAM:
     """Load the model from stored best parameters
