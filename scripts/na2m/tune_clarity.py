@@ -52,11 +52,10 @@ import torch
 import yaml
 from torch.utils.data import DataLoader
 
-from na2m.data.data_utils import load_compas, preprocess, split
 from na2m.data.dataset import NAMDataset
 from na2m.models.na2m import NA2M
 from na2m.training.fit_na2m import stage1_main, stage2_select, stage3_finetune
-from na2m.selection.policy import NoGate
+from na2m.selection.policy import NoGate, ConcurvityGate
 from na2m.training.metrics import auroc
 from na2m.utils.config import NA2MConfig, load_na2m_config
 
@@ -138,6 +137,7 @@ def objective_clarity(
     val_loader: DataLoader,
     pool_loader: DataLoader,
     search_spec: dict,
+    with_concurvity_filter: bool,
 ) -> float:
     """Sample clarity_regularization, run Stage 2/3 from the fixed mains, return val AUROC.
 
@@ -153,6 +153,9 @@ def objective_clarity(
             without touching the original.
         train_loader, val_loader, pool_loader: Shared loaders (built once).
         search_spec: Dict with keys type/low/high for clarity_regularization.
+        with_concurvity_filter: If True use ConcurvityGate in Stage 2 (arm C);
+            otherwise NoGate (arm B). Affects which pairs survive and therefore
+            the optimal clarity λ.
 
     Returns:
         Validation AUROC after Stage 2 + Stage 3 with this trial's clarity.
@@ -164,25 +167,17 @@ def objective_clarity(
         log=True,
     )
 
-    # This trial's config: identical to the tuned mains config except clarity.
     cfg = copy.deepcopy(config)
     cfg.clarity_regularization = clarity
 
-    # Fresh starting point: the SAME post-Stage-1 mains for every trial.
-    # deepcopy is essential — Stage 3 fine-tunes the mains, so we must not mutate
-    # the shared snapshot.
     model = copy.deepcopy(stage1_snapshot)
 
-    # Arm B during clarity tuning: the concurvity gate never fires (NoGate).
-    # Arm C reuses this same clarity value, so we do not search a separate one.
-    stage2_select(
-        model,
-        train_loader,
-        val_loader,
-        pool_loader,
-        cfg,
-        selection_policy=NoGate(),
-    )
+    if with_concurvity_filter:
+        policy = ConcurvityGate(cfg.concurvity_threshold)
+    else:
+        policy = NoGate()
+
+    stage2_select(model, train_loader, val_loader, pool_loader, cfg, selection_policy=policy)
     stage3_finetune(model, train_loader, val_loader, pool_loader, cfg)
 
     return _val_auroc(model, val_loader)
@@ -193,7 +188,7 @@ def objective_clarity(
 # --------------------------------------------------------------------------- #
 
 def tune_clarity_fold(
-    tuned_config_path: Path,
+    mains_config_path: Path,
     n_trials: int,
     search_spec: dict,
     feature_meta,
@@ -201,50 +196,46 @@ def tune_clarity_fold(
     y_train: np.ndarray,
     X_val: np.ndarray,
     y_val: np.ndarray,
+    output_path: Path,
     *,
+    with_concurvity_filter: bool,
     study_name: str = "clarity_search",
 ) -> Path:
-    """Train the mains once, search clarity_regularization over Stage 2/3, write λ back.
+    """Train the mains once, search clarity_regularization over Stage 2/3, write result.
 
-    Reads the Stage-1 tuned config, trains the main bank ONCE on this split, then
-    runs an Optuna study where each trial restarts from that fixed mains snapshot
-    and runs only Stage 2 + Stage 3. The best clarity_regularization is written
-    back into tuned_config_path, producing the single complete config used by both
-    arm B and arm C.
+    Reads the Stage-1 mains config, trains the main bank ONCE, then runs an Optuna
+    study where each trial restarts from that fixed snapshot and runs only Stage 2/3.
+    The best clarity_regularization is written into output_path (a copy of the mains
+    config extended with the arm's tuned λ). Each arm gets its own output_path.
 
     Args:
-        tuned_config_path: YAML written by tune_na2m.tune_fold (mains config).
-            Updated in place with the best clarity_regularization.
+        mains_config_path: YAML written by tune_main_na2m.tune_fold (mains config, read-only).
         n_trials: Number of Optuna trials.
         search_spec: Dict with keys type/low/high for clarity_regularization.
         feature_meta: FeatureMeta list from preprocess().
         X_train, y_train: Training split (the fold's fixed inner train).
         X_val, y_val: Validation split (the fold's fixed inner val).
+        output_path: Where to write the arm's complete tuned config (mains hp + λ).
+        with_concurvity_filter: True → ConcurvityGate in Stage 2 (arm C); False → NoGate (arm B).
         study_name: Optuna study name.
 
     Returns:
-        tuned_config_path after updating.
+        output_path after writing.
     """
-    config = load_na2m_config(str(tuned_config_path))
+    config = load_na2m_config(str(mains_config_path))
     num_features = X_train.shape[1]
 
-    # Loaders are identical for every trial — build them once.
     train_loader, val_loader, pool_loader = _build_loaders(
         X_train, y_train, X_val, y_val, config.batch_size
     )
 
-    # ---- Stage 1 ONCE: train + center the mains with the tuned hyperparameters ----
-    # clarity has no effect here, so this is shared by the whole clarity search.
     print(f"[clarity] Training main effects once (Stage 1) for study '{study_name}'...")
     stage1_model = _build_na2m(config, num_features, feature_meta)
     stage1_main(stage1_model, train_loader, val_loader, pool_loader, config)
     stage1_model.eval()
-    stage1_snapshot = copy.deepcopy(stage1_model)  # frozen reference; never mutated
+    stage1_snapshot = copy.deepcopy(stage1_model)
     print("[clarity] Stage-1 mains snapshot ready. Searching clarity over Stage 2/3...")
 
-    # ---- Optuna over clarity only; each trial = Stage 2/3 from the snapshot ----
-    # No pruner: Stage 1 is lifted out, so there are no clarity-dependent
-    # intermediate metrics to prune on.
     study = optuna.create_study(
         study_name=study_name,
         direction="maximize",
@@ -259,56 +250,22 @@ def tune_clarity_fold(
             val_loader,
             pool_loader,
             search_spec,
+            with_concurvity_filter,
         ),
         n_trials=n_trials,
     )
 
     best_clarity = study.best_trial.params["clarity_regularization"]
 
-    # ---- Write the best clarity back into the same tuned YAML ----
-    with open(tuned_config_path) as f:
+    # Write mains config + tuned clarity into the arm's output path.
+    with open(mains_config_path) as f:
         raw = yaml.safe_load(f)
     raw["clarity_regularization"] = best_clarity
-    with open(tuned_config_path, "w") as f:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w") as f:
         yaml.dump(raw, f, default_flow_style=False, sort_keys=False)
 
     print(f"Best clarity val AUROC    : {study.best_trial.value:.4f}")
-    print(f"Best clarity_regularization={best_clarity:.6f} written to {tuned_config_path}")
-    return tuned_config_path
+    print(f"Best clarity_regularization={best_clarity:.6f} written to {output_path}")
+    return output_path
 
-
-def main() -> None:
-    # --- Edit these ---
-    _SEARCH_CONFIG = r"C:\Users\maart\OneDrive\Documenten\Universiteit\Scriptie\python_repo\thesis-nam\configs\compas_na2m_search.yaml"
-    _TUNED_CONFIG  = r"C:\Users\maart\OneDrive\Documenten\Universiteit\Scriptie\python_repo\thesis-nam\configs\compas-scores-two-years_na2m_tuned.yaml"
-    # ------------------
-
-    n_trials, search_spec = load_clarity_search_config(_SEARCH_CONFIG)
-
-    config = load_na2m_config(_TUNED_CONFIG)
-    df = load_compas(config.dataset_path)
-    X, y, feature_meta = preprocess(df)
-    X_train, X_val, X_test, y_train, y_val, y_test = split(
-        X,
-        y,
-        config.val_frac,
-        config.test_frac,
-        seed=getattr(config, "seed", 42),
-    )
-
-    dataset_name = Path(config.dataset_path).stem
-    tune_clarity_fold(
-        tuned_config_path=Path(_TUNED_CONFIG),
-        n_trials=n_trials,
-        search_spec=search_spec,
-        feature_meta=feature_meta,
-        X_train=X_train,
-        y_train=y_train,
-        X_val=X_val,
-        y_val=y_val,
-        study_name=f"{dataset_name}_clarity_search",
-    )
-
-
-if __name__ == "__main__":
-    main()

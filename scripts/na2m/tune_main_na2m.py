@@ -72,9 +72,8 @@ def objective(
     """
     trial_params = suggest_hyperparams(trial, search_space)
 
-    _EXCLUDE = {"n_trials", "dataset_path", "clarity_n_trials", "clarity_search_space"}
     config = NA2MConfig(
-        **{k: v for k, v in fixed_params.items() if k not in _EXCLUDE},
+        **{k: v for k, v in fixed_params.items() if k != "dataset_path"},
         **trial_params,
     )
 
@@ -141,9 +140,10 @@ def save_best_config(
     clarity_regularization is kept at its fixed value (0.0) — it will be
     overwritten by tune_clarity.tune_clarity_fold in a second pass.
     """
-    _DROP = {"n_trials", "clarity_n_trials", "clarity_search_space", "clarity_regularization"}
+    _DROP = {"dataset_path", "n_trials", "clarity_n_trials"}
     best_params = {k: v for k, v in fixed_params.items() if k not in _DROP}
     best_params.update(study.best_trial.params)
+    best_params["clarity_regularization"] = 0.0  # placeholder; tune_clarity_fold overwrites
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:

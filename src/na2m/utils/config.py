@@ -206,16 +206,15 @@ def load_na2m_config(path: str) -> NA2MConfig:
 
 
 def load_na2m_search_config(path: str) -> tuple[dict, dict]:
-    """Load a tuning config: fixed settings + an Optuna search space.
-
-    The YAML carries a top-level `search_space` block (same schema as
-    NAM's load_search_config) that is popped out from the fixed settings.
+    """Load a tuning config: fixed params + search space.
 
     Args:
         path: Path to the search YAML.
 
     Returns:
-        (fixed_settings, search_space) dicts.
+        (fixed_params, search_space) where fixed_params holds all non-search fields
+        (including study knobs like n_trials / clarity_n_trials) and search_space
+        holds the per-parameter specs to pass to Optuna.
     """
     with open(path) as f:
         raw = yaml.safe_load(f)

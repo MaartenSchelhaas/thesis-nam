@@ -38,6 +38,7 @@ from na2m.data.dataset import NAMDataset
 from na2m.training.fit_na2m import fit_na2m
 from na2m.eval.extract import extract_measures
 from na2m.utils.config import load_na2m_config
+from na2m.utils.device import get_device
 
 # arm name -> (with_interactions, with_concurvity_filter). Single source of truth
 # for which arms exist and the order they run in.
@@ -55,7 +56,9 @@ def set_seed(seed: int) -> None:
 
 
 def build_model(config, num_features: int, feature_meta) -> NA2M:
-    return NA2M(
+    # Single construction point → moving to device here covers training, run_arm's
+    # deepcopy, and load_main_effects (which load_state_dicts into these params).
+    model = NA2M(
         num_features=num_features,
         feature_meta=feature_meta,
         num_units=config.num_units,
@@ -66,6 +69,7 @@ def build_model(config, num_features: int, feature_meta) -> NA2M:
         inter_units=config.inter_units,
         inter_hidden=config.inter_hidden,
     )
+    return model.to(get_device())
 
 
 def _build_loaders(config, X_train, y_train, X_val, y_val):

@@ -107,5 +107,38 @@ varying the seed varies only initialization, isolating optimization variance.
 
 The build status of each piece is tracked in `docs/todo.md`.
 
+### Run output layout
+
+All outputs land under `runs/<dataset>/` (gitignored). Tuned hyperparameter
+configs are shared across run modes; run outputs are mode-specific:
+
+```
+runs/compas/
+    fold_k/                           ← tuning outputs, shared across run modes
+        mains_tuned_config.yaml       ← best main-effects hp (arch + lr + reg)
+        gaminet_tuned_config.yaml     ← mains hp + tuned clarity λ for arm B
+        concurvity_tuned_config.yaml  ← mains hp + tuned clarity λ for arm C
+    fixed/fold_k/                     ← run outputs for run_mode="fixed"
+        mains/run_i/
+            model.pt                  ← trained mains checkpoint (arm A)
+            measures.pt               ← extracted per-term outputs + test logits
+            done                      ← sentinel: written last, guards resume
+        gaminet/run_i/
+            measures.pt
+            done
+        concurvity/run_i/
+            measures.pt
+            done
+    subsample/fold_k/                 ← run outputs for run_mode="subsample"
+        mains/run_i/  ...
+        gaminet/run_i/  ...
+        concurvity/run_i/  ...
+```
+
+Tuning is done once per fold regardless of how many run modes you evaluate.
+Switching from `fixed` to `subsample` reuses the tuned configs and only
+re-runs the model training. Resume is fully granular: the `done` sentinel is
+written last, so a crashed run continues exactly where it left off on rerun.
+
 ## Usage
 

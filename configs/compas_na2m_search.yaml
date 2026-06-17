@@ -21,6 +21,7 @@ eta_prune: 0.01
 block_train_epochs: 100
 finetune_epochs: 100
 concurvity_threshold: 0.5
+clarity_n_trials: 15
 
 # --- Main-effects search space (tune_na2m.py) ---
 # clarity_regularization is intentionally absent — it is tuned separately by
@@ -47,11 +48,16 @@ search_space:
   feature_dropout:
     type: categorical
     choices: [0, 0.05, 0.1, 0.2]
+  marginal_clarity:
+    type: float_log
+    low: 0.0001
+    high: 1.0
+
 
 # --- Clarity search space (tune_clarity.py) ---
 # Searched separately after main-effects tuning; written back to the tuned YAML.
-clarity_n_trials: 15
-clarity_search_space:
-  type: float_log
-  low: 0.0001
-  high: 1.0
+
+#clarity_search_space:
+#  type: float_log
+#  low: 0.0001
+#  high: 1.0

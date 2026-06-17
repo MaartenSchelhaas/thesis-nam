@@ -25,20 +25,24 @@ sentinel LAST. This file only checks those sentinels to drive resume — it neve
 reloads a model to extract from it.
 
 Resume contract (granular, NOT coarse fold/run flags):
-    - tuned_config.yaml present  → skip tuning for the fold.
-    - mains/done present         → skip run_main_effects; just load_main_effects.
-    - <arm>/done present         → skip that arm.
-This lets an interrupted run continue AND a newly-added arm get picked up on a
-rerun of an otherwise-complete run.
+    - fold_k/mains_tuned_config.yaml present      → skip main-effects tuning.
+    - fold_k/<arm>_tuned_config.yaml present      → skip clarity tuning for that arm.
+    - <run_mode>/fold_k/mains/run_i/done present  → skip run_main_effects; load instead.
+    - <run_mode>/fold_k/<arm>/run_i/done present  → skip that arm for that run.
+Tuning configs are shared across run modes; run outputs are mode-specific.
+Switching from "fixed" to "subsample" reuses the tuned configs but finds no done
+sentinels under the new mode, so all runs execute fresh without re-tuning.
 
 Output layout:
-    BASE_DIR/<run_mode>/fold_k/
-        tuned_config.yaml
-        run_i/
-            mains/       model.pt, measures.pt, done   (arm A == the mains model)
-            gaminet/     measures.pt, done             (arm B)
-            concurvity/  measures.pt, done             (arm C)
-        done
+    runs/compas/
+        fold_k/                              ← shared across run modes
+            mains_tuned_config.yaml
+            gaminet_tuned_config.yaml
+            concurvity_tuned_config.yaml
+        <run_mode>/fold_k/                   ← mode-specific run outputs
+            mains/run_i/      model.pt, measures.pt, done
+            gaminet/run_i/    measures.pt, done
+            concurvity/run_i/ measures.pt, done
 """
 
 from pathlib import Path
@@ -48,14 +52,15 @@ from sklearn.model_selection import KFold, train_test_split
 
 from na2m.data.data_utils import load_compas, preprocess
 from na2m.utils.config import NA2MConfig, load_na2m_config, load_na2m_search_config
+# NA2MConfig used in run_arms signature; load_na2m_config used in run_fold after tuning.
 from scripts.na2m.model_runner import (
     run_main_effects,
     load_main_effects,
     run_arm,
     _ARM_FLAGS,
 )
-from scripts.na2m.tune_na2m import tune_fold
-from scripts.na2m.tune_clarity import load_clarity_search_config, tune_clarity_fold
+from scripts.na2m.tune_main_na2m import tune_fold
+from scripts.na2m.tune_clarity import tune_clarity_fold
 
 
 # --------------------------------------------------------------------------- #
@@ -78,12 +83,19 @@ def derive_run_seeds(
         run_seeds[fold][run] — the seed handed to run_main_effects/run_arm so init
         + optimization order vary per run (and, in subsample mode, the resample).
 
-    TODO:
-        - root = np.random.SeedSequence(master).
-        - per fold_ss in root.spawn(n_folds): spawn n_runs children,
-          int(child.generate_state(1)[0]) each.
     """
-    raise NotImplementedError
+    root = np.random.SeedSequence(master)
+    fold_sequences = root.spawn(n_folds)
+
+    run_seeds = []
+    for fold_ss in fold_sequences:
+        run_sequences = fold_ss.spawn(n_runs)
+        fold_run_seeds = []
+        for run_ss in run_sequences:
+            fold_run_seeds.append(int(run_ss.generate_state(1)[0]))
+        run_seeds.append(fold_run_seeds)
+
+    return run_seeds
 
 
 def derive_fold_split_seeds(
@@ -102,58 +114,15 @@ def derive_fold_split_seeds(
     Returns:
         One int per fold, used as random_state for the fixed inner split AND for
         the per-fold tuning split.
-
-    TODO:
-        - root = np.random.SeedSequence(master + 1).
-        - [int(ss.generate_state(1)[0]) for ss in root.spawn(n_folds)].
     """
-    raise NotImplementedError
+    root = np.random.SeedSequence(master + 1)
+    fold_sequences = root.spawn(n_folds)
 
+    fold_split_seeds = []
+    for fold_ss in fold_sequences:
+        fold_split_seeds.append(int(fold_ss.generate_state(1)[0]))
 
-# --------------------------------------------------------------------------- #
-# Per-fold tuning                                                              #
-# --------------------------------------------------------------------------- #
-
-def tune_fold_two_stage(
-    search_config_path: str,
-    feature_meta,
-    X_tune: np.ndarray,
-    y_tune: np.ndarray,
-    X_tune_val: np.ndarray,
-    y_tune_val: np.ndarray,
-    tuned_config_path: Path,
-    *,
-    fold_idx: int,
-) -> Path:
-    """Tune one fold: Stage 1 mains always; Stage 2 clarity (single λ for B and C).
-
-    Both stages tune on the SAME fixed inner split (passed in). Thin wrapper over
-    tune_fold (Stage 1, pruning on) and tune_clarity_fold (Stage 2, pruning off).
-    Writes the complete tuned config (mains hp + λ) that every arm loads.
-
-    Args:
-        search_config_path: Search YAML with both search spaces + trial budgets.
-        feature_meta: FeatureMeta list from preprocess().
-        X_tune, y_tune: Fixed inner train split.
-        X_tune_val, y_tune_val: Fixed inner val split.
-        tuned_config_path: Stage 1 writes here; Stage 2 rewrites λ in place.
-        fold_idx: For unique Optuna study names.
-
-    Returns:
-        tuned_config_path after both stages.
-
-    TODO:
-        - fixed_params, search_space = load_na2m_search_config(search_config_path).
-        - tune_fold(fixed_params, search_space, feature_meta, X_tune, y_tune,
-                    X_tune_val, y_tune_val, tuned_config_path,
-                    study_name=f"fold_{fold_idx}_main_search").
-        - n_trials, spec = load_clarity_search_config(search_config_path).
-        - tune_clarity_fold(tuned_config_path, n_trials, spec, feature_meta,
-                            X_tune, y_tune, X_tune_val, y_tune_val,
-                            study_name=f"fold_{fold_idx}_clarity_search").
-        - return tuned_config_path.
-    """
-    raise NotImplementedError
+    return fold_split_seeds
 
 
 # --------------------------------------------------------------------------- #
@@ -183,11 +152,18 @@ def fold_inner_split(
     Returns:
         (train_idx, val_idx) — subsets of pool_idx.
 
-    TODO:
-        - rs = fold_split_seed if run_mode == "fixed" else run_seed.
-        - return train_test_split(pool_idx, test_size=val_frac_of_pool, random_state=rs).
     """
-    raise NotImplementedError
+    if run_mode == "fixed":
+        random_state = fold_split_seed
+    else:
+        random_state = run_seed
+
+    train_idx, val_idx = train_test_split(
+        pool_idx,
+        test_size=val_frac_of_pool,
+        random_state=random_state,
+    )
+    return train_idx, val_idx
 
 
 # --------------------------------------------------------------------------- #
@@ -195,49 +171,48 @@ def fold_inner_split(
 # --------------------------------------------------------------------------- #
 
 def run_arms(
-    config: NA2MConfig,
+    mains_config: NA2MConfig,
     X: np.ndarray,
     y: np.ndarray,
     feature_meta,
     train_idx: np.ndarray,
     val_idx: np.ndarray,
     test_idx: np.ndarray,
+    tune_dir: Path,
     run_dir: Path,
+    run_i: int,
     run_seed: int,
 ) -> None:
     """One run: ensure the mains exist, then produce every interaction arm — resumably.
 
-    Mains are deterministic given (split, run_seed), so they are trained once
-    (run_main_effects, which also extracts arm A), persisted, and every interaction
-    arm branches off them via run_arm. All arms use the same run_seed so B and C are
-    paired — only the gate differs. Each model_runner call extracts + flags its own
-    `done`; this function only checks those sentinels to skip completed work, so an
-    interrupted run continues and a newly-added arm is picked up on rerun.
-
-    The fold's 80% pool is train_idx ∪ val_idx, so model_runner reconstructs it from
-    the train/val slices — no pool_idx needed here.
+    Mains are trained once per run, persisted, then B and C deepcopy from that
+    trained state. Tuned configs are read from tune_dir (shared across run modes);
+    run outputs (model.pt, measures.pt, done) are written under run_dir (mode-specific).
 
     Args:
-        config: NA2MConfig loaded from the fold's tuned_config.yaml.
+        mains_config: NA2MConfig loaded from tune_dir/mains_tuned_config.yaml.
         X, y: Full dataset as numpy arrays.
         feature_meta: FeatureMeta list from preprocess().
         train_idx, val_idx: This run's train / val indices (from fold_inner_split).
         test_idx: The fold's test slice (measure extraction inside model_runner).
-        run_dir: Output dir for this run (per-arm subdirs live under it).
-        run_seed: Seed for mains + all arms of this run.
+        tune_dir: Shared fold dir holding <arm>_tuned_config.yaml files.
+        run_dir: Mode-specific fold dir; per-arm run outputs are written here.
+        run_i: Run index (used to name the run subdirectory).
+        run_seed: Seed for mains init + optimization, passed to run_main_effects/run_arm.
 
     TODO:
-        - mains_dir = run_dir / "mains".
+        - mains_dir = run_dir / "mains" / f"run_{run_i}".
         - if not (mains_dir / "done").exists():
-              run_main_effects(config, feature_meta, X[train_idx], y[train_idx],
+              run_main_effects(mains_config, feature_meta, X[train_idx], y[train_idx],
                                X[val_idx], y[val_idx], X[test_idx], y[test_idx],
                                run_seed, mains_dir).
-        - mains = load_main_effects(config, feature_meta, X.shape[1], mains_dir / "model.pt").
+        - mains = load_main_effects(mains_config, feature_meta, X.shape[1], mains_dir / "model.pt").
         - for arm, (wi, wc) in _ARM_FLAGS.items():
-              if not wi: continue            # arm A handled by run_main_effects
-              arm_dir = run_dir / arm
+              if not wi: continue
+              arm_dir = run_dir / arm / f"run_{run_i}"
               if (arm_dir / "done").exists(): continue
-              run_arm(config, mains, feature_meta, X[train_idx], y[train_idx],
+              arm_config = load_na2m_config(str(tune_dir / f"{arm}_tuned_config.yaml")).
+              run_arm(arm_config, mains, feature_meta, X[train_idx], y[train_idx],
                       X[val_idx], y[val_idx], X[test_idx], y[test_idx],
                       run_seed, arm_dir, with_interactions=wi, with_concurvity_filter=wc).
     """
@@ -249,14 +224,15 @@ def run_arms(
 # --------------------------------------------------------------------------- #
 
 def run_fold(
-    config: NA2MConfig,
-    search_config_path: str | None,
+    fixed_params: dict,
+    search_space: dict,
     X: np.ndarray,
     y: np.ndarray,
     feature_meta,
     pool_idx: np.ndarray,
     test_idx: np.ndarray,
-    fold_dir: Path,
+    tune_dir: Path,
+    run_dir: Path,
     *,
     fold_idx: int,
     run_mode: str,
@@ -266,42 +242,85 @@ def run_fold(
 ) -> None:
     """Everything that happens within ONE fold.
 
-    1. Tune + STORE the hyperparameter config once (on the fold's fixed inner
-       split), so every run in this fold trains with the same hyperparameters.
-    2. Loop n_runs: resolve the split (fold_inner_split), then run_arms.
+    1. Tune + STORE hyperparameter configs once into tune_dir (shared across run modes).
+    2. Load the mains tuned config as NA2MConfig.
+    3. Loop n_runs: resolve the split (fold_inner_split), then run_arms into run_dir.
 
     Args:
-        config: Base NA2MConfig (overwritten by the fold's tuned config if tuning).
-        search_config_path: Search YAML for tuning; None → use `config` as-is.
+        fixed_params: Non-search fields from load_na2m_search_config.
+        search_space: Full search space dict (mains + marginal_clarity).
         X, y: Full dataset as numpy arrays.
         feature_meta: FeatureMeta list from preprocess().
         pool_idx: This fold's 80% pool indices.
         test_idx: This fold's test slice indices.
-        fold_dir: This fold's output dir.
+        tune_dir: Shared fold dir for tuned configs (base_dir/fold_k/).
+        run_dir: Mode-specific fold dir for run outputs (base_dir/run_mode/fold_k/).
         fold_idx: Fold number (study names / logging).
         run_mode: "fixed" | "subsample".
         n_runs: Number of runs in this fold.
         fold_split_seed: This fold's split seed (keys the fixed inner split + tuning).
-        run_seeds: The n_runs init seeds for this fold (run_seeds[fold]).
-
-    TODO:
-        - skip whole fold if fold_dir/"done" exists.
-        - val_frac_of_pool = config.val_frac / (1 - config.test_frac).
-        - # Hyperparameter config — done & stored ONCE at fold start:
-          fixed inner split via fold_inner_split(pool_idx, ..., run_mode="fixed",
-              fold_split_seed=fold_split_seed, run_seed=fold_split_seed)  # fixed for tuning
-          tuned_config_path = fold_dir / "tuned_config.yaml"
-          if search_config_path: tune_fold_two_stage(... X[tune], ... tuned_config_path,
-              fold_idx=fold_idx); config = load_na2m_config(tuned_config_path).
-        - for run_i, run_seed in enumerate(run_seeds):
-              run_dir = fold_dir / f"run_{run_i}"; skip if run_dir/"done".
-              train_idx, val_idx = fold_inner_split(pool_idx, val_frac_of_pool,
-                  run_mode=run_mode, fold_split_seed=fold_split_seed, run_seed=run_seed).
-              run_arms(config, X, y, feature_meta, train_idx, val_idx,
-                       test_idx, run_dir, run_seed).
-        - touch fold_dir/"done".
+        run_seeds: The n_runs init seeds for this fold.
     """
-    raise NotImplementedError
+    tune_dir.mkdir(parents=True, exist_ok=True)
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- Tuning split (always deterministic from fold_split_seed; not run-mode-dependent) ---
+    val_frac_of_pool = fixed_params["val_frac"] / (1 - fixed_params["test_frac"])
+    tune_idx, tune_val_idx = train_test_split(
+        pool_idx,
+        test_size=val_frac_of_pool,
+        random_state=fold_split_seed,
+    )
+
+    # --- Stage 1: main-effects tuning (once per fold, shared across run modes) ---
+    mains_config_path = tune_dir / "mains_tuned_config.yaml"
+    if not mains_config_path.exists():
+        mains_space = {k: v for k, v in search_space.items() if k != "marginal_clarity"}
+        tune_fold(
+            fixed_params, mains_space, feature_meta,
+            X[tune_idx], y[tune_idx],
+            X[tune_val_idx], y[tune_val_idx],
+            mains_config_path,
+            study_name=f"fold_{fold_idx}_main_search",
+        )
+
+    # --- Stage 2: per-arm clarity tuning (each arm guarded independently) ---
+    for arm, (with_interactions, with_concurvity_filter) in _ARM_FLAGS.items():
+        if not with_interactions:
+            continue
+        arm_config_path = tune_dir / f"{arm}_tuned_config.yaml"
+        if arm_config_path.exists():
+            continue
+        tune_clarity_fold(
+            mains_config_path,
+            fixed_params["clarity_n_trials"],
+            search_space["marginal_clarity"],
+            feature_meta,
+            X[tune_idx], y[tune_idx],
+            X[tune_val_idx], y[tune_val_idx],
+            arm_config_path,
+            with_concurvity_filter=with_concurvity_filter,
+            study_name=f"fold_{fold_idx}_{arm}_clarity_search",
+        )
+
+    mains_config = load_na2m_config(str(mains_config_path))
+    val_frac_of_pool = mains_config.val_frac / (1 - mains_config.test_frac)
+
+    for run_i, run_seed in enumerate(run_seeds):
+        train_idx, val_idx = fold_inner_split(
+            pool_idx, val_frac_of_pool,
+            run_mode=run_mode,
+            fold_split_seed=fold_split_seed,
+            run_seed=run_seed,
+        )
+        run_arms(
+            mains_config, X, y, feature_meta,
+            train_idx, val_idx, test_idx,
+            tune_dir=tune_dir,
+            run_dir=run_dir,
+            run_i=run_i,
+            run_seed=run_seed,
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -309,8 +328,7 @@ def run_fold(
 # --------------------------------------------------------------------------- #
 
 def evaluate_na2m(
-    config: NA2MConfig,
-    search_config_path: str | None,
+    search_config_path: str,
     X: np.ndarray,
     y: np.ndarray,
     feature_meta,
@@ -319,39 +337,44 @@ def evaluate_na2m(
     run_mode: str,
     n_runs: int,
     n_folds: int,
-    seed: int,
 ) -> None:
-    """Outer k-fold loop: derive seeds, split into folds, run each fold.
+    """Outer k-fold loop: load search config, derive seeds, split into folds, run each.
 
-    Runs ALL arms (mains trained once per run, B/C branch off it). No metric is
-    computed here.
+    Loads fixed_params and search_space once; passes them to run_fold which tunes
+    per fold and constructs the NA2MConfig from the tuned result. No metric computed here.
 
     Args:
-        config: Base NA2MConfig (model/training hp only).
-        search_config_path: Search YAML for per-fold tuning; None → skip tuning.
+        search_config_path: Search YAML (fixed params + search spaces).
         X, y: Full dataset as numpy arrays.
         feature_meta: FeatureMeta list from preprocess().
-        base_dir: Root output dir; run_mode is appended to the path.
+        base_dir: Root output dir; run_mode subdir is created under it.
         run_mode: "fixed" | "subsample".
         n_runs: Number of runs per fold.
         n_folds: Number of outer CV folds.
-        seed: The single master seed; folds + per-run init seeds derive from it.
-
-    TODO:
-        - assert run_mode in {"fixed", "subsample"}.
-        - out_dir = base_dir / run_mode.
-        - fold_split_seeds = derive_fold_split_seeds(seed, n_folds);
-          run_seeds        = derive_run_seeds(seed, n_folds, n_runs).
-        - KFold(n_folds, shuffle=True, random_state=config.fold_seed).split(X)
-          → (pool_idx, test_idx) per fold.
-        - for fold_idx, (pool_idx, test_idx):
-              run_fold(config, search_config_path, X, y, feature_meta, pool_idx,
-                       test_idx, fold_dir=out_dir / f"fold_{fold_idx}",
-                       fold_idx=fold_idx, run_mode=run_mode, n_runs=n_runs,
-                       fold_split_seed=fold_split_seeds[fold_idx],
-                       run_seeds=run_seeds[fold_idx]).
     """
-    raise NotImplementedError
+    assert run_mode in {"fixed", "subsample"}
+    out_dir = base_dir / run_mode
+
+    fixed_params, search_space = load_na2m_search_config(search_config_path)
+
+    fold_split_seeds = derive_fold_split_seeds(fixed_params["seed"], n_folds)
+    run_seeds        = derive_run_seeds(fixed_params["seed"], n_folds, n_runs)
+
+    kf = KFold(n_splits=n_folds, shuffle=True, random_state=fixed_params["seed"])
+    for fold_idx, (pool_idx, test_idx) in enumerate(kf.split(X)):
+        tune_dir = base_dir / f"fold_{fold_idx}"
+        run_dir  = base_dir / run_mode / f"fold_{fold_idx}"
+        run_fold(
+            fixed_params, search_space, X, y, feature_meta,
+            pool_idx, test_idx,
+            tune_dir=tune_dir,
+            run_dir=run_dir,
+            fold_idx=fold_idx,
+            run_mode=run_mode,
+            n_runs=n_runs,
+            fold_split_seed=fold_split_seeds[fold_idx],
+            run_seeds=run_seeds[fold_idx],
+        )
 
 
 def main() -> None:
@@ -360,19 +383,21 @@ def main() -> None:
     RUN_MODE  = "fixed"        # "fixed" | "subsample"
     N_RUNS    = 20
     N_FOLDS   = 5
-    SEED      = 42             # master seed: folds + per-run init seeds derive from it
-    BASE_DIR  = Path("runs/na2m_eval")
+    BASE_DIR  = Path("runs/compas")
     FRESH     = False          # True → delete BASE_DIR/<run_mode> first
     # -------------------------------------------------------------------- #
 
-    # TODO (wiring only):
+    # TODO:
     #   - if FRESH and (BASE_DIR / RUN_MODE).exists(): shutil.rmtree(it).
     #   - fixed_params, _ = load_na2m_search_config(SEARCH_CONFIG_PATH).
     #   - df = load_compas(fixed_params["dataset_path"]); X, y, feature_meta = preprocess(df).
-    #   - config = NA2MConfig(**non-search fields)  OR load a base tuned yaml.
-    #   - evaluate_na2m(config, SEARCH_CONFIG_PATH, X, y, feature_meta, BASE_DIR,
-    #         run_mode=RUN_MODE, n_runs=N_RUNS, n_folds=N_FOLDS, seed=SEED).
+    #   - evaluate_na2m(SEARCH_CONFIG_PATH, X, y, feature_meta, BASE_DIR,
+    #         run_mode=RUN_MODE, n_runs=N_RUNS, n_folds=N_FOLDS).
     raise NotImplementedError
+
+
+
+
 
 
 if __name__ == "__main__":
