@@ -51,11 +51,9 @@ import numpy as np
 from sklearn.model_selection import KFold, train_test_split
 
 from na2m.data.data_utils import load_compas, preprocess
-from na2m.utils.config import NA2MConfig, load_na2m_config, load_na2m_search_config
-# NA2MConfig used in run_arms signature; load_na2m_config used in run_fold after tuning.
+from na2m.utils.config import load_na2m_config, load_na2m_search_config
 from scripts.na2m.model_runner import (
     run_main_effects,
-    load_main_effects,
     run_arm,
     _ARM_FLAGS,
 )
@@ -171,7 +169,6 @@ def fold_inner_split(
 # --------------------------------------------------------------------------- #
 
 def run_arms(
-    mains_config: NA2MConfig,
     X: np.ndarray,
     y: np.ndarray,
     feature_meta,
@@ -186,37 +183,57 @@ def run_arms(
     """One run: ensure the mains exist, then produce every interaction arm — resumably.
 
     Mains are trained once per run, persisted, then B and C deepcopy from that
-    trained state. Tuned configs are read from tune_dir (shared across run modes);
+    trained state. All configs are loaded from tune_dir (shared across run modes);
     run outputs (model.pt, measures.pt, done) are written under run_dir (mode-specific).
 
     Args:
-        mains_config: NA2MConfig loaded from tune_dir/mains_tuned_config.yaml.
         X, y: Full dataset as numpy arrays.
         feature_meta: FeatureMeta list from preprocess().
         train_idx, val_idx: This run's train / val indices (from fold_inner_split).
         test_idx: The fold's test slice (measure extraction inside model_runner).
-        tune_dir: Shared fold dir holding <arm>_tuned_config.yaml files.
+        tune_dir: Shared fold dir holding all tuned config YAML files.
         run_dir: Mode-specific fold dir; per-arm run outputs are written here.
         run_i: Run index (used to name the run subdirectory).
         run_seed: Seed for mains init + optimization, passed to run_main_effects/run_arm.
 
-    TODO:
-        - mains_dir = run_dir / "mains" / f"run_{run_i}".
-        - if not (mains_dir / "done").exists():
-              run_main_effects(mains_config, feature_meta, X[train_idx], y[train_idx],
-                               X[val_idx], y[val_idx], X[test_idx], y[test_idx],
-                               run_seed, mains_dir).
-        - mains = load_main_effects(mains_config, feature_meta, X.shape[1], mains_dir / "model.pt").
-        - for arm, (wi, wc) in _ARM_FLAGS.items():
-              if not wi: continue
-              arm_dir = run_dir / arm / f"run_{run_i}"
-              if (arm_dir / "done").exists(): continue
-              arm_config = load_na2m_config(str(tune_dir / f"{arm}_tuned_config.yaml")).
-              run_arm(arm_config, mains, feature_meta, X[train_idx], y[train_idx],
-                      X[val_idx], y[val_idx], X[test_idx], y[test_idx],
-                      run_seed, arm_dir, with_interactions=wi, with_concurvity_filter=wc).
     """
-    raise NotImplementedError
+    mains_config = load_na2m_config(str(tune_dir / "mains_tuned_config.yaml"))
+
+    # --- Arm A (mains-only): train once per run, persist model ---
+    mains_dir = run_dir / "mains" / f"run_{run_i}"
+    mains_dir.mkdir(parents=True, exist_ok=True)
+
+    if not (mains_dir / "done").exists():
+        run_main_effects(
+            mains_config, feature_meta,
+            X[train_idx], y[train_idx],
+            X[val_idx], y[val_idx],
+            X[test_idx], y[test_idx],
+            run_seed, mains_dir,
+        )
+
+    # --- Arms B and C: branch from the persisted mains checkpoint ---
+    mains_model_path = mains_dir / "model.pt"
+
+    for arm, (with_interactions, with_concurvity_filter) in _ARM_FLAGS.items():
+        if not with_interactions:
+            continue
+
+        arm_dir = run_dir / arm / f"run_{run_i}"
+        if (arm_dir / "done").exists():
+            continue
+
+        arm_dir.mkdir(parents=True, exist_ok=True)
+        arm_config = load_na2m_config(str(tune_dir / f"{arm}_tuned_config.yaml"))
+        run_arm(
+            arm_config, mains_model_path, feature_meta,
+            X[train_idx], y[train_idx],
+            X[val_idx], y[val_idx],
+            X[test_idx], y[test_idx],
+            run_seed, arm_dir,
+            with_interactions=with_interactions,
+            with_concurvity_filter=with_concurvity_filter,
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -306,7 +323,8 @@ def run_fold(
     mains_config = load_na2m_config(str(mains_config_path))
     val_frac_of_pool = mains_config.val_frac / (1 - mains_config.test_frac)
 
-    for run_i, run_seed in enumerate(run_seeds):
+    for run_i in range(n_runs):
+        run_seed = run_seeds[run_i]
         train_idx, val_idx = fold_inner_split(
             pool_idx, val_frac_of_pool,
             run_mode=run_mode,
@@ -314,7 +332,7 @@ def run_fold(
             run_seed=run_seed,
         )
         run_arms(
-            mains_config, X, y, feature_meta,
+            X, y, feature_meta,
             train_idx, val_idx, test_idx,
             tune_dir=tune_dir,
             run_dir=run_dir,
@@ -387,18 +405,20 @@ def main() -> None:
     FRESH     = False          # True → delete BASE_DIR/<run_mode> first
     # -------------------------------------------------------------------- #
 
-    # TODO:
-    #   - if FRESH and (BASE_DIR / RUN_MODE).exists(): shutil.rmtree(it).
-    #   - fixed_params, _ = load_na2m_search_config(SEARCH_CONFIG_PATH).
-    #   - df = load_compas(fixed_params["dataset_path"]); X, y, feature_meta = preprocess(df).
-    #   - evaluate_na2m(SEARCH_CONFIG_PATH, X, y, feature_meta, BASE_DIR,
-    #         run_mode=RUN_MODE, n_runs=N_RUNS, n_folds=N_FOLDS).
-    raise NotImplementedError
+    if FRESH and (BASE_DIR / RUN_MODE).exists():
+        import shutil
+        shutil.rmtree(BASE_DIR / RUN_MODE)
 
+    fixed_params, _ = load_na2m_search_config(SEARCH_CONFIG_PATH)
+    df = load_compas(fixed_params["dataset_path"])
+    X, y, feature_meta = preprocess(df)
 
-
-
-
+    evaluate_na2m(
+        SEARCH_CONFIG_PATH, X, y, feature_meta, BASE_DIR,
+        run_mode=RUN_MODE,
+        n_runs=N_RUNS,
+        n_folds=N_FOLDS,
+    )
 
 if __name__ == "__main__":
     main()

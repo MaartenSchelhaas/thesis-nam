@@ -203,7 +203,7 @@ def load_main_effects(
 
 def run_arm(
     config,
-    mains_model: NA2M,
+    mains_model_path: Path,
     feature_meta,
     X_train, y_train,
     X_val, y_val,
@@ -214,15 +214,16 @@ def run_arm(
     with_interactions: bool,
     with_concurvity_filter: bool,
 ) -> dict:
-    """Run ONE arm by continuing from an already-trained mains model, then extract.
+    """Run ONE arm by continuing from a persisted mains checkpoint, then extract.
 
-    deepcopies the mains base (so the base is never mutated and arms stay
-    independent), seeds the interaction stages, runs from Stage 2 onward via
-    fit_na2m(mains_pretrained=True), then extracts + stores the arm's measures.
+    Loads the mains from disk, deepcopies (so the checkpoint on disk is never
+    mutated and arms stay independent), seeds the interaction stages, runs from
+    Stage 2 onward via fit_na2m(mains_pretrained=True), then extracts + stores
+    the arm's measures.
 
     Args:
         config: NA2MConfig with model + training hyperparameters.
-        mains_model: Trained mains base (from run_main_effects/load_main_effects). NOT modified.
+        mains_model_path: Path to the saved mains state_dict (mains_dir/"model.pt").
         feature_meta: FeatureMeta list from preprocess().
         X_train, y_train: Training split (same split used for the mains).
         X_val, y_val: Validation split (same split used for the mains).
@@ -236,6 +237,7 @@ def run_arm(
         fit_na2m's result dict: {"model": NA2M, "active_pairs": [...]}.
     """
     set_seed(seed)
+    mains_model = load_main_effects(config, feature_meta, X_train.shape[1], mains_model_path)
     model = copy.deepcopy(mains_model)
     train_loader, val_loader, pool_loader = _build_loaders(config, X_train, y_train, X_val, y_val)
 
@@ -273,12 +275,11 @@ if __name__ == "__main__":
     # Train the mains once (saves model.pt + extracts arm-A measures), then branch.
     run_main_effects(config, feature_meta, X_train, y_train, X_val, y_val,
                      X_test, y_test, seed, mains_dir)
-    mains = load_main_effects(config, feature_meta, X.shape[1], mains_dir / "model.pt")
 
     for arm, (with_interactions, with_concurvity_filter) in _ARM_FLAGS.items():
         if not with_interactions:
             continue  # arm A already handled by run_main_effects
-        run_arm(config, mains, feature_meta, X_train, y_train, X_val, y_val,
+        run_arm(config, mains_dir / "model.pt", feature_meta, X_train, y_train, X_val, y_val,
                 X_test, y_test, seed, out_root / arm,
                 with_interactions=with_interactions,
                 with_concurvity_filter=with_concurvity_filter)
