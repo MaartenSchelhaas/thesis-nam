@@ -35,14 +35,14 @@ sentinels under the new mode, so all runs execute fresh without re-tuning.
 
 Output layout:
     runs/compas/
-        fold_k/                              ← shared across run modes
-            mains_tuned_config.yaml
+        fold_k/                              ← per-fold root
+            mains_tuned_config.yaml          ← tuned configs (shared across run modes)
             gaminet_tuned_config.yaml
             concurvity_tuned_config.yaml
-        <run_mode>/fold_k/                   ← mode-specific run outputs
-            mains/run_i/      model.pt, measures.pt, done
-            gaminet/run_i/    measures.pt, done
-            concurvity/run_i/ measures.pt, done
+            <run_mode>/                      ← mode-specific run outputs
+                mains/run_i/      model.pt, measures.pt, done
+                gaminet/run_i/    measures.pt, done
+                concurvity/run_i/ measures.pt, done
 """
 
 from pathlib import Path
@@ -381,7 +381,7 @@ def evaluate_na2m(
     kf = KFold(n_splits=n_folds, shuffle=True, random_state=fixed_params["seed"])
     for fold_idx, (pool_idx, test_idx) in enumerate(kf.split(X)):
         tune_dir = base_dir / f"fold_{fold_idx}"
-        run_dir  = base_dir / run_mode / f"fold_{fold_idx}"
+        run_dir  = base_dir / f"fold_{fold_idx}" / run_mode
         run_fold(
             fixed_params, search_space, X, y, feature_meta,
             pool_idx, test_idx,

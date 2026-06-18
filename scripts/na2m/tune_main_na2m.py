@@ -72,8 +72,9 @@ def objective(
     """
     trial_params = suggest_hyperparams(trial, search_space)
 
+    _na2m_fields = set(NA2MConfig.__dataclass_fields__)
     config = NA2MConfig(
-        **{k: v for k, v in fixed_params.items() if k != "dataset_path"},
+        **{k: v for k, v in fixed_params.items() if k in _na2m_fields},
         **trial_params,
     )
 

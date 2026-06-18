@@ -14,7 +14,7 @@ config on disk is never modified:
 Writes to runs/pipeline_test/ so it never touches runs/compas/.
 
 Run from the project root:
-    python notebooks/na2m_pipeline_test.py
+    python -m notebooks.na2m_pipeline_test
 """
 
 from pathlib import Path
@@ -48,9 +48,9 @@ fixed_params, search_space = load_na2m_search_config(SEARCH_CONFIG_PATH)
 
 fixed_params["n_trials"]            = 10
 fixed_params["clarity_n_trials"]    = 5
-fixed_params["num_epochs"]          = 20
-fixed_params["block_train_epochs"]  = 20
-fixed_params["finetune_epochs"]     = 20
+fixed_params["num_epochs"]          = 100
+fixed_params["block_train_epochs"]  = 100
+fixed_params["finetune_epochs"]     = 100
 fixed_params["patience"]            = 10
 
 # Reconstruct the full YAML dict (load_na2m_search_config pops search_space,
@@ -98,7 +98,7 @@ print("\n--- Verification ---")
 arm_names = ["mains", "gaminet", "concurvity"]
 
 for fold_idx in range(N_FOLDS):
-    run_dir = BASE_DIR / RUN_MODE / f"fold_{fold_idx}"
+    run_dir = BASE_DIR / f"fold_{fold_idx}" / RUN_MODE
     for arm in arm_names:
         for run_i in range(N_RUNS):
             arm_dir = run_dir / arm / f"run_{run_i}"

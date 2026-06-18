@@ -198,13 +198,17 @@ class NA2M(nn.Module):
             if key in self.inter_nns:
                 continue
             in_features = self._inter_in_features(j, k)
-            self.inter_nns[key] = FeatureNN(
+            subnet = FeatureNN(
                 num_units=self.inter_units,
                 hidden_sizes=self.inter_hidden,
                 dropout=self.dropout,
                 activation="relu",
                 in_features=in_features,
             )
+            for m in subnet.modules():
+                if isinstance(m, nn.Linear):
+                    nn.init.orthogonal_(m.weight)
+            self.inter_nns[key] = subnet
             self.inter_centers[key] = torch.zeros(1, device=self._bias.device)
             self._inter_folded[key] = False
         
