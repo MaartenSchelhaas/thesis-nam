@@ -1,40 +1,15 @@
 """
-fit_na2m — staged-training orchestrator for the NA2M arms.
+fit_na2m — three-stage training pipeline for one NA2M arm on one (fold, seed).
 
-Drives the GAMI-Net-style training pipeline on ONE (fold, seed) for ONE arm,
-mutating a dynamic NA2M model in place. Staging lives here — there is NO
-separate TrainerNA2M; each stage builds/rebuilds a Trainer over the right
-parameter subset.
+Stage 1: train main effects, center.
+Stage 2: FAST screen → block-train top-M interactions (mains frozen) → single
+         forward prune sweep with a predictive-contribution gate and, for arm C,
+         a concurvity gate.
+Stage 3: unfreeze all, fine-tune once with the clarity penalty, re-center.
 
-Stages (THREE — the old Stage-4 iterative concurvity removal is GONE):
-    1. stage1_main    — train the main bank; center.
-    2. stage2_select  — FAST screen → top-M → add interactions → block-train all
-                        of them jointly (mains frozen) → ONE forward prune sweep
-                        applying two gates in a single pass:
-                          (a) concurvity gate  [arm C only]  — skip a candidate
-                              whose block-trained output is too redundant with
-                              the mains + already-ACCEPTED interactions;
-                          (b) predictive-contribution gate — min-max cut on the
-                              accepted candidates' validation-loss sequence.
-    3. stage3_finetune — unfreeze → fine-tune all params ONCE with the
-                        marginal-clarity penalty → re-center.
-
-Arm mapping (the ONLY differences are the two flags):
-    Arm A → with_interactions=False                       → stage1 only.
-    Arm B → with_interactions=True,  filter=False         → stages 1–3, gate OFF.
-    Arm C → with_interactions=True,  filter=True          → stages 1–3, gate ON.
-B and C run an IDENTICAL pipeline; arm C merely fires the concurvity gate inside
-the Stage-2 sweep. Both fine-tune EXACTLY ONCE.
-
-HARD CONSTRAINTS honoured here:
-    - Rebuild the optimizer (new Trainer / params) after EVERY structural change.
-    - Restore best weights (trainer.load_best) before returning / extracting.
-    - SPLIT CONTRACT: the internal pool train/val split is keyed off `fold`
-      (hp.fold_seed), NEVER off `seed`. `seed` controls init + optimization only.
-      Do not reseed the split per replicate — the stability metric depends on the
-      data being identical across seeds of a fold.
-    - NO per-removal re-fine-tune exists anywhere. The model fine-tunes once
-      (Stage 3) for both arms. (See the removed-stage flag at the bottom.)
+Arms differ only by two flags: with_interactions and with_concurvity_filter.
+Arm A skips stages 2-3 entirely. Arms B and C run the same pipeline; C fires
+the concurvity gate inside the sweep. Both fine-tune exactly once.
 """
 from na2m.models.na2m import NA2M
 from na2m.training.trainer import Trainer
@@ -61,48 +36,23 @@ def fit_na2m(
     mains_pretrained: bool = False,
     trial=None,
 ) -> None:
-    """Run the staged NA2M training pipeline for one arm on one (fold, seed).
+    """Run the staged NA2M training pipeline for one arm. Mutates model in place.
 
-    Mutates `model` in place — best weights restored, eval mode on return.
-
-    Reproducibility contract (caller's responsibility, NOT this function's):
-        - Set the RNG seed (torch, numpy, random) BEFORE creating the model and
-          calling fit_na2m. This covers weight initialization and optimization
-          stochasticity in one shot.
-        - Build the train/val/pool loaders once per fold (keyed off fold, not
-          seed) and pass them in. This function never re-splits or re-seeds.
+    Set the RNG seed and build the data loaders before calling — this function
+    never re-seeds or re-splits. The caller must deepcopy the mains model before
+    passing it for arms B or C, since fit_na2m modifies it in place.
 
     Args:
-        model: Freshly initialised NA2M with the seed already applied (interactions
-               empty at entry).
-        train_loader: Internal training split loader (fold-keyed, shared across seeds).
-        val_loader: Internal validation split loader (fold-keyed, shared across seeds).
-        pool_loader: Full 80% pool loader — reference sample for centering.
-        config: NA2MConfig with model + training hyperparameters.
-        with_interactions: If False → arm A (stage1 only).
-        with_concurvity_filter: If True → arm C (concurvity gate ON in stage 2);
-            if False → arm B. Has NO effect when with_interactions is False.
-        mains_pretrained: If False (default) → train the mains first (stage1_main),
-            then continue. If True → SKIP stage 1 and assume `model` ALREADY has its
-            main effects trained + centered; only the interaction stages run.
-
-            The mains are deterministic given (fold, seed), so train them ONCE and
-            branch several arms off the same mains model without retraining:
-
-                set_seed(seed); mains = build_model()
-                fit_na2m(mains, ..., with_interactions=False)             # arm A (trains mains)
-                model_b = copy.deepcopy(mains)
-                fit_na2m(model_b, ..., with_interactions=True,
-                         with_concurvity_filter=False, mains_pretrained=True)   # arm B
-                model_c = copy.deepcopy(mains)
-                fit_na2m(model_c, ..., with_interactions=True,
-                         with_concurvity_filter=True,  mains_pretrained=True)   # arm C
-
-            Deepcopy at the CALL SITE: fit_na2m mutates `model` in place, so pass a
-            distinct copy per arm or arm C would start from arm B's fine-tuned weights.
-            A future method (a different gate/policy) plugs in the same way.
-        trial: Optuna trial for Stage-1 pruning. Only used when mains_pretrained is
-            False (Stage 1 is the only pruned stage); ignored otherwise.
+        model: NA2M to train. For arm A: freshly initialised. For arms B/C: a
+               deepcopy of the already-trained mains model.
+        train_loader: Training split (same split used for all seeds within a fold).
+        val_loader: Validation split (same split used for all seeds within a fold).
+        pool_loader: Full 80% pool — centering reference.
+        config: Hyperparameters.
+        with_interactions: False → arm A (stage 1 only).
+        with_concurvity_filter: True → arm C (concurvity gate in stage 2); False → arm B.
+        mains_pretrained: If True, skip stage 1 (model already has trained mains).
+        trial: Optuna trial for stage-1 pruning; ignored when mains_pretrained=True.
     """
     if not mains_pretrained:
         stage1_main(model, train_loader, val_loader, pool_loader, config, trial=trial)

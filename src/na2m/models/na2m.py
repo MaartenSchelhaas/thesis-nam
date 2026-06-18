@@ -55,31 +55,17 @@ class NA2M(nn.Module):
         inter_units: int = 32,
         inter_hidden: list = [],
     ):
-        """Initialize the NA2M model.
-
+        """
         Args:
-            num_features (int): Number of input features (main terms).
-            feature_meta (list): Per-feature metadata (FeatureMeta), carries type/levels.
-                                 Kept on the model — the harness needs type/levels.
-            num_units (int): Width of the main FeatureNN activation layer.
-            hidden_sizes (list): Hidden layer widths for main FeatureNNs.
-            dropout (float): Dropout inside main subnets.
-            feature_dropout (float): Probability of dropping an entire term before summation.
-            activation (str): Main FeatureNN activation, 'exu' or 'relu'.
-            inter_units (int): Width of the interaction FeatureNN activation layer. Defaults to 32.
-            inter_hidden (list): Hidden layer widths for interaction subnets. Defaults to [] (shallow).
-
-        Attributes set:
-            main_nns:       nn.ModuleList of FeatureNN (num) or CategNet (cat), one per feature.
-            inter_nns:      nn.ModuleDict, empty at init; populated by add_interactions().
-            _bias:          Global learnable scalar intercept (nn.Parameter).
-            dropout_layer:  Feature dropout applied before summation.
-            main_centers:   Registered buffer (num_features,); accumulated centering offsets
-                            per main term. Subtracted in main_outputs.
-            inter_centers:  Plain dict "j,k" → tensor; centering offsets per interaction.
-                            Plain dict (not buffer) because keys are dynamic.
-            _inter_folded:  Plain dict "j,k" → bool; True when the interaction's offset has
-                            been folded into _bias. Used by remove_interaction to restore _bias.
+            num_features: Number of input features (main terms).
+            feature_meta: Per-feature metadata (FeatureMeta), carries type/levels.
+            num_units: Width of the main FeatureNN activation layer.
+            hidden_sizes: Hidden layer widths for main FeatureNNs.
+            dropout: Dropout probability inside main subnets.
+            feature_dropout: Probability of dropping an entire term before summation.
+            activation: Main FeatureNN activation, 'exu' or 'relu'.
+            inter_units: Width of the interaction FeatureNN activation layer.
+            inter_hidden: Hidden layer widths for interaction subnets ([] = shallow).
         """
         super().__init__()
         #Sanity check
@@ -254,19 +240,12 @@ class NA2M(nn.Module):
     # Centering
     # ------------------------------------------------------------------
     def center_main_effects(self, pool_loader: DataLoader) -> None:
-        """Fold each main subnet's current mean into _bias.
+        """Fold each main subnet's current mean into _bias, making outputs zero-mean over the pool.
 
-        Iterates over pool_loader in eval/no_grad mode, accumulates the sum of
-        each main subnet's effective output (raw - already-accumulated offset),
-        then divides by N to get the mean delta. That delta is added to
-        main_centers (so main_outputs subtracts it on future forward passes) and
-        to _bias (so predictions remain unchanged). 
-
-        Call after Stage 1 AND after the single Stage-3 fine-tune.
+        Call after Stage 1 and after Stage-3 fine-tune.
 
         Args:
-            pool_loader: DataLoader over the full training pool (X, y, idx).
-                         Yields batches of (X_batch, _, _).
+            pool_loader: DataLoader over the full training pool.
         """
         was_training = self.training
         self.eval()  # disable dropout — we want deterministic outputs
@@ -389,25 +368,17 @@ class NA2M(nn.Module):
         return self.inter_nns[key](x_col) - self.inter_centers.get(key, 0.0)
 
     def raw_subnet_output(self, subnet_id, x: torch.Tensor) -> torch.Tensor:
-        """Evaluate ONE subnet on an arbitrary input matrix; return its RAW output.
+        """Evaluate one subnet on a full-width input matrix, returning the raw uncentered output.
 
-        The accessor the evaluation harness is built around: pass any input matrix
-        (e.g. a held-out test fold the subnet never trained on) and get that subnet's
-        UNCENTERED output. Centering is deliberately deferred to the consumer,
-        because the correct reference sample differs per metric and is NOT the
-        model's deployment (pool) centering:
-            * stability  → reducer re-centers over the TEST fold.
-            * concurvity → the OLS intercept centers over the POOL.
-        Do NOT subtract main_centers / inter_centers here. (For the pool-centered
-        deployment value, use centered_subnet_output / main_outputs instead.)
+        Centering is not applied here because the correct reference sample differs per metric:
+        stability re-centers over the test fold, concurvity over the pool. The reducer handles it.
 
         Args:
             subnet_id: ("main", j) or ("inter", j, k).
-            x: Input matrix, shape (batch_size, num_features). Full-width rows;
-               this method selects the column(s) the subnet needs.
+            x: Full-width input matrix (batch, num_features); columns are selected internally.
 
         Returns:
-            Raw output vector, shape (batch_size, 1).
+            Raw output, shape (batch_size, 1).
         """
         kind = subnet_id[0]
 

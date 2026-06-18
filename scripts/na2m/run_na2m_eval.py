@@ -1,45 +1,26 @@
 """
-run_na2m_eval.py — the NA2M k-fold × n_runs evaluation ORCHESTRATOR.
+run_na2m_eval.py — k-fold × n_runs evaluation loop for all three NA2M arms.
 
-Owns WHERE the model runs and HOW outputs are laid out: fold/run loops, the
-train/val split policy, seed derivation, folder layout. The actual model runs +
-measure extraction live in model_runner.py (run_main_effects / load_main_effects /
-run_arm); pure compute lives in src/na2m. This file never builds or holds a model.
+Call stack (each level owns one responsibility):
+    evaluate_na2m  → outer k-fold loop, seed derivation
+      └ run_fold   → tune + store configs once per fold, loop over runs
+          └ run_arms → train mains once, branch arms B/C off the same checkpoint
 
-Modular layering (each level does one thing, top → bottom):
+run_mode controls the inner train/val split strategy:
+    "fixed"     → same split every run within a fold (used for stability evaluation)
+    "subsample" → fresh split per run (Agarwal-style ensemble)
 
-    evaluate_na2m   outer k-fold loop: derive seeds, split into folds, call run_fold
-      └ run_fold    everything within ONE fold: tune + store config once, loop runs
-          └ run_arms    one run: train mains ONCE, branch all arms (run_arm × N)
-              └ fold_inner_split   resolve train/val split for the run (fixed | subsample)
-
-Two user-facing axes (PARAMETERS, set in main(); never NA2MConfig fields):
-    RUN_MODE  "fixed"     → one train/val split per fold (split contract; stability)
-              "subsample" → fresh split per run (Agarwal-style ensemble)
-    arms      all three run every (fold, run): the mains are trained once and arms
-              B/C branch off them — see train._ARM_FLAGS.
-
-Extraction is owned by model_runner: run_main_effects / run_arm extract + persist
-each arm's measures while the model is in memory, then write a per-arm `done`
-sentinel LAST. This file only checks those sentinels to drive resume — it never
-reloads a model to extract from it.
-
-Resume contract (granular, NOT coarse fold/run flags):
-    - fold_k/mains_tuned_config.yaml present      → skip main-effects tuning.
-    - fold_k/<arm>_tuned_config.yaml present      → skip clarity tuning for that arm.
-    - <run_mode>/fold_k/mains/run_i/done present  → skip run_main_effects; load instead.
-    - <run_mode>/fold_k/<arm>/run_i/done present  → skip that arm for that run.
-Tuning configs are shared across run modes; run outputs are mode-specific.
-Switching from "fixed" to "subsample" reuses the tuned configs but finds no done
-sentinels under the new mode, so all runs execute fresh without re-tuning.
+Resume is granular: each done sentinel (written last by model_runner) marks one
+arm/run as complete. Tuned configs are shared across run modes; run outputs are
+mode-specific, so switching run_mode reruns all models without re-tuning.
 
 Output layout:
     runs/compas/
-        fold_k/                              ← per-fold root
-            mains_tuned_config.yaml          ← tuned configs (shared across run modes)
+        fold_k/
+            mains_tuned_config.yaml      ← shared across run modes
             gaminet_tuned_config.yaml
             concurvity_tuned_config.yaml
-            <run_mode>/                      ← mode-specific run outputs
+            <run_mode>/
                 mains/run_i/      model.pt, measures.pt, done
                 gaminet/run_i/    measures.pt, done
                 concurvity/run_i/ measures.pt, done
