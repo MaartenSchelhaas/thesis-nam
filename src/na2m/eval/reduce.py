@@ -1,5 +1,6 @@
 """
-reduce — cheap, re-runnable, model-agnostic metric computation from stored measures.
+reduce — cheap, re-runnable, model-agnostic metric computation and visualization
+from stored measures.
 
 Reads the measure files written by the evaluator script
 (scripts/na2m/run_na2m_eval.py) — never touches a live model — and computes the

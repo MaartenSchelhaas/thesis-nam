@@ -364,24 +364,29 @@ class NA2M(nn.Module):
     # ------------------------------------------------------------------
     # Per-term evaluation
     # ------------------------------------------------------------------
-    def iter_subnets(self):
-        """Yield (subnet_id, fn) for every subnet: mains first, then active interactions.
+    def centered_subnet_output(self, subnet_id: tuple, x_col: torch.Tensor) -> torch.Tensor:
+        """Run one subnet on a column of input values and return its centered output.
 
-        subnet_id is ("main", j) or ("inter", j, k). `fn` evaluates that ONE subnet on
-        arbitrary inputs (1-col for main, 2-col for inter), returning CENTERED
-        (deployment) outputs. This is the path for anything that wants the model's
-        own pool-centering. The EVAL metrics do NOT use this — they re-center over
-        their own sample, so they call raw_subnet_output instead.
+        Pass x_col as (G, 1) for a main effect or (G, width) for an interaction.
+        The pool-centering offset accumulated during training is subtracted, so the
+        output is zero-mean over the training pool — ready to use directly in a shape plot.
 
-        Yields:
-            (subnet_id, fn) tuples.
+        Args:
+            subnet_id: ("main", j) or ("inter", j, k).
+            x_col: The subnet's own input column(s), built from make_grid.
 
-        TODO:
-            - main fn: raw_main(j, col) - main_centers[j]   (late-bind j=j)
-            - inter fn: raw_inter(key, cols) - inter_centers.get(key, 0.0)  (late-bind key=key)
-            - returned fns yield CENTERED outputs.
+        Returns:
+            Centered output, shape (G, 1).
         """
-        raise NotImplementedError
+        kind = subnet_id[0]
+
+        if kind == "main":
+            j = subnet_id[1]
+            return self.main_nns[j](x_col) - self.main_centers[j]
+
+        j, k = subnet_id[1], subnet_id[2]
+        key = f"{j},{k}"
+        return self.inter_nns[key](x_col) - self.inter_centers.get(key, 0.0)
 
     def raw_subnet_output(self, subnet_id, x: torch.Tensor) -> torch.Tensor:
         """Evaluate ONE subnet on an arbitrary input matrix; return its RAW output.
@@ -394,7 +399,7 @@ class NA2M(nn.Module):
             * stability  → reducer re-centers over the TEST fold.
             * concurvity → the OLS intercept centers over the POOL.
         Do NOT subtract main_centers / inter_centers here. (For the pool-centered
-        deployment value, use iter_subnets / main_outputs instead.)
+        deployment value, use centered_subnet_output / main_outputs instead.)
 
         Args:
             subnet_id: ("main", j) or ("inter", j, k).

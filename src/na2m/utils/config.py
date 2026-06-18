@@ -178,7 +178,7 @@ class NA2MConfig:
     # stability across these seeds is the headline metric, so vary nothing but
     # the seed between replicates of a fold.
 
-    grid_size: int = 100
+    grid_size: int = 256
     # G: number of grid points per numerical feature for shape-curve
     # extraction and the FAST interaction-strength approximation.
 

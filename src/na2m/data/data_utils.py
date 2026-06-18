@@ -2,7 +2,7 @@
 na2m/data/data_utils.py — preprocessing for the NA2M route-2 dataset path.
 
 Categoricals are INTEGER-CODED (one column per feature, one CategNet subnet
-per feature). Numericals are MinMax-scaled to [0, 1]. Do NOT one-hot here —
+per feature). Numericals are MinMaxScaled to [0, 1]. Do NOT one-hot here —
 CategNet handles that internally.
 
 Stands alone: does not import from nam.data.data_utils.
@@ -147,27 +147,27 @@ def split(
     return X_train, X_val, X_test, y_train, y_val, y_test
 
 
-def make_grid(feature_meta: list[FeatureMeta], j: int, G: int = 100) -> np.ndarray:
-    """
-    Build the evaluation grid for feature j.
+def make_grid(feature_meta: list[FeatureMeta], j: int, G: int = 256) -> np.ndarray:
+    """Build the evaluation grid for feature j in model space.
 
-    Numerical → linspace over [0, 1] (model space) with a stored real-unit axis
-    available via inverse-transform. Categorical → arange(n_levels).
+    Returns the grid the subnet is evaluated on. Inverse-transform to real units
+    is the caller's responsibility (extract_measures applies it for curve storage).
 
     Args:
         feature_meta: Per-feature metadata list.
         j: Feature index.
-        G: Number of grid points for numerical features.
+        G: Number of grid points for numerical features (ignored for categorical).
 
     Returns:
-        1-D grid array: (G,) for numerical, (n_levels,) for categorical.
-
-    TODO:
-        - Branch on feature_meta[j].type.
-        - num: np.linspace(0, 1, G); keep a real-unit axis via inverse-transform.
-        - cat: np.arange(feature_meta[j].n_levels).
+        1-D grid in model space:
+            num → (G,) float32, linspace [0, 1]
+            cat → (n_levels,) float32, integer codes 0 … n_levels-1
     """
-    raise NotImplementedError
+    meta = feature_meta[j]
+    if meta.type == "num":
+        return np.linspace(0, 1, G, dtype=np.float32)
+    assert meta.n_levels is not None, f"categorical feature '{meta.name}' missing n_levels"
+    return np.arange(meta.n_levels, dtype=np.float32)
 
 
 def density_weights(
@@ -177,7 +177,7 @@ def density_weights(
     grid: np.ndarray,
 ) -> np.ndarray:
     """
-    #TODO: Ignore for now, implement at the end if necessary. 
+    #TODO: Ignore for now, implement at the end if necessary.
     Compute density weights for feature j over its grid, on the 80% train pool.
 
     Numerical → normalized histogram of X_pool[:, j] over grid bins.

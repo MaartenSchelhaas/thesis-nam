@@ -1,27 +1,10 @@
 """
-model_runner.py — the NA2M model layer: build, train, save, load, and extract.
+model_runner.py — train, persist, and extract measures for each NA2M arm.
 
-Owns everything about a model on disk. "Running" a model means producing it
-(by training from a seed) or reconstructing it (by loading from disk — the same
-model, deterministically), then extracting + storing its measures. The
-orchestrator (run_na2m_eval.py) only decides WHERE things go and in WHAT order; it
-never builds a model itself.
-
-The main effects are deterministic given (split, seed), so they are trained ONCE,
-persisted, and every arm branches off that base:
-
-    run_main_effects(..., out_dir=mains_dir)     # train mains, save model.pt, extract arm A
-    mains = load_main_effects(..., mains_dir/"model.pt")
-    run_arm(mains, ..., out_dir=arm_dir, <flags>)# continue from mains, extract arm B/C
-
-run_arm deepcopies the mains base, so it is safe to call repeatedly on the same
-model. A future method is just another set of flags.
-
-Persistence split: the mains model is saved as a state_dict (mains-only, so its
-`main_centers` buffer + params are a COMPLETE snapshot — the dynamic interaction
-dicts are empty). Arm models are NOT persisted; we store their MEASURES instead.
-extract_measures itself (src/na2m/eval/extract.py) still needs implementing — the
-_extract_and_save hook below is where it plugs in.
+The mains are trained once per run and saved to model.pt. Arms B and C deepcopy
+from that checkpoint so they all start from the same base. After each arm finishes
+training, its measures are extracted and saved to measures.pt — the model itself
+is then discarded. Only the mains model.pt is kept on disk; arm models are not.
 """
 
 import copy
@@ -120,9 +103,9 @@ def _extract_and_save(
     # fit_na2m already does this, but _extract_and_save owns this precondition.
     model.eval()
 
-    # Grids are used only for shape-plot curves, which are not yet implemented.
-    # Pass an empty dict so extract_measures receives the correct type.
-    grids = {}
+    # Build per-feature evaluation grids (model space). Shared across runs so
+    # curves from different seeds overlay point-for-point in the shape plots.
+    grids = {j: make_grid(feature_meta, j, config.grid_size) for j in range(model.num_features)}
 
     # Extract all measures from the live model. This returns everything except y_test.
     measures = extract_measures(model, X_pool, X_test, grids, feature_meta)
