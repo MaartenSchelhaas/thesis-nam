@@ -55,31 +55,17 @@ class NA2M(nn.Module):
         inter_units: int = 32,
         inter_hidden: list = [],
     ):
-        """Initialize the NA2M model.
-
+        """
         Args:
-            num_features (int): Number of input features (main terms).
-            feature_meta (list): Per-feature metadata (FeatureMeta), carries type/levels.
-                                 Kept on the model — the harness needs type/levels.
-            num_units (int): Width of the main FeatureNN activation layer.
-            hidden_sizes (list): Hidden layer widths for main FeatureNNs.
-            dropout (float): Dropout inside main subnets.
-            feature_dropout (float): Probability of dropping an entire term before summation.
-            activation (str): Main FeatureNN activation, 'exu' or 'relu'.
-            inter_units (int): Width of the interaction FeatureNN activation layer. Defaults to 32.
-            inter_hidden (list): Hidden layer widths for interaction subnets. Defaults to [] (shallow).
-
-        Attributes set:
-            main_nns:       nn.ModuleList of FeatureNN (num) or CategNet (cat), one per feature.
-            inter_nns:      nn.ModuleDict, empty at init; populated by add_interactions().
-            _bias:          Global learnable scalar intercept (nn.Parameter).
-            dropout_layer:  Feature dropout applied before summation.
-            main_centers:   Registered buffer (num_features,); accumulated centering offsets
-                            per main term. Subtracted in main_outputs.
-            inter_centers:  Plain dict "j,k" → tensor; centering offsets per interaction.
-                            Plain dict (not buffer) because keys are dynamic.
-            _inter_folded:  Plain dict "j,k" → bool; True when the interaction's offset has
-                            been folded into _bias. Used by remove_interaction to restore _bias.
+            num_features: Number of input features (main terms).
+            feature_meta: Per-feature metadata (FeatureMeta), carries type/levels.
+            num_units: Width of the main FeatureNN activation layer.
+            hidden_sizes: Hidden layer widths for main FeatureNNs.
+            dropout: Dropout probability inside main subnets.
+            feature_dropout: Probability of dropping an entire term before summation.
+            activation: Main FeatureNN activation, 'exu' or 'relu'.
+            inter_units: Width of the interaction FeatureNN activation layer.
+            inter_hidden: Hidden layer widths for interaction subnets ([] = shallow).
         """
         super().__init__()
         #Sanity check
@@ -198,13 +184,17 @@ class NA2M(nn.Module):
             if key in self.inter_nns:
                 continue
             in_features = self._inter_in_features(j, k)
-            self.inter_nns[key] = FeatureNN(
+            subnet = FeatureNN(
                 num_units=self.inter_units,
                 hidden_sizes=self.inter_hidden,
                 dropout=self.dropout,
                 activation="relu",
                 in_features=in_features,
             )
+            for m in subnet.modules():
+                if isinstance(m, nn.Linear):
+                    nn.init.orthogonal_(m.weight)
+            self.inter_nns[key] = subnet
             self.inter_centers[key] = torch.zeros(1, device=self._bias.device)
             self._inter_folded[key] = False
         
@@ -250,19 +240,12 @@ class NA2M(nn.Module):
     # Centering
     # ------------------------------------------------------------------
     def center_main_effects(self, pool_loader: DataLoader) -> None:
-        """Fold each main subnet's current mean into _bias.
+        """Fold each main subnet's current mean into _bias, making outputs zero-mean over the pool.
 
-        Iterates over pool_loader in eval/no_grad mode, accumulates the sum of
-        each main subnet's effective output (raw - already-accumulated offset),
-        then divides by N to get the mean delta. That delta is added to
-        main_centers (so main_outputs subtracts it on future forward passes) and
-        to _bias (so predictions remain unchanged). 
-
-        Call after Stage 1 AND after the single Stage-3 fine-tune.
+        Call after Stage 1 and after Stage-3 fine-tune.
 
         Args:
-            pool_loader: DataLoader over the full training pool (X, y, idx).
-                         Yields batches of (X_batch, _, _).
+            pool_loader: DataLoader over the full training pool.
         """
         was_training = self.training
         self.eval()  # disable dropout — we want deterministic outputs
@@ -360,53 +343,57 @@ class NA2M(nn.Module):
     # ------------------------------------------------------------------
     # Per-term evaluation
     # ------------------------------------------------------------------
-    def iter_terms(self):
-        """Yield (term_id, fn) for every term: mains first, then active interactions.
+    def centered_subnet_output(self, subnet_id: tuple, x_col: torch.Tensor) -> torch.Tensor:
+        """Run one subnet on a column of input values and return its centered output.
 
-        term_id is ("main", j) or ("inter", j, k). `fn` evaluates that ONE term on
-        arbitrary inputs (1-col for main, 2-col for inter), returning CENTERED
-        (deployment) outputs. This is the path for anything that wants the model's
-        own pool-centering. The EVAL metrics do NOT use this — they re-center over
-        their own sample, so they call raw_term_output instead.
-
-        Yields:
-            (term_id, fn) tuples.
-
-        TODO:
-            - main fn: raw_main(j, col) - main_centers[j]   (late-bind j=j)
-            - inter fn: raw_inter(key, cols) - inter_centers.get(key, 0.0)  (late-bind key=key)
-            - returned fns yield CENTERED outputs.
-        """
-        raise NotImplementedError
-
-    def raw_term_output(self, term_id, x: torch.Tensor) -> torch.Tensor:
-        """Evaluate ONE subnet on an arbitrary input matrix; return its RAW output.
-
-        The accessor the evaluation harness is built around: pass any input matrix
-        (e.g. a held-out test fold the subnet never trained on) and get that term's
-        UNCENTERED output. Centering is deliberately deferred to the consumer,
-        because the correct reference sample differs per metric and is NOT the
-        model's deployment (pool) centering:
-            * stability  → reducer re-centers over the TEST fold.
-            * concurvity → the OLS intercept centers over the POOL.
-        Do NOT subtract main_centers / inter_centers here. (For the pool-centered
-        deployment value, use iter_terms / main_outputs instead.)
+        Pass x_col as (G, 1) for a main effect or (G, width) for an interaction.
+        The pool-centering offset accumulated during training is subtracted, so the
+        output is zero-mean over the training pool — ready to use directly in a shape plot.
 
         Args:
-            term_id: ("main", j) or ("inter", j, k).
-            x: Input matrix, shape (batch_size, num_features). Full-width rows;
-               this method selects the column(s) the term needs.
+            subnet_id: ("main", j) or ("inter", j, k).
+            x_col: The subnet's own input column(s), built from make_grid.
 
         Returns:
-            Raw output vector, shape (batch_size, 1).
-
-        TODO:
-            - ("main", j):    raw = main_nns[j](x[:, j:j+1])            # NO center
-            - ("inter", j, k): cols = encode + stack columns j, k as the subnet was
-                               built; raw = inter_nns[f"{j},{k}"](cols)  # NO center
-            - Reuse _encode_col so categorical handling matches construction.
+            Centered output, shape (G, 1).
         """
-        raise NotImplementedError
+        kind = subnet_id[0]
+
+        if kind == "main":
+            j = subnet_id[1]
+            return self.main_nns[j](x_col) - self.main_centers[j]
+
+        j, k = subnet_id[1], subnet_id[2]
+        key = f"{j},{k}"
+        return self.inter_nns[key](x_col) - self.inter_centers.get(key, 0.0)
+
+    def raw_subnet_output(self, subnet_id, x: torch.Tensor) -> torch.Tensor:
+        """Evaluate one subnet on a full-width input matrix, returning the raw uncentered output.
+
+        Centering is not applied here because the correct reference sample differs per metric:
+        stability re-centers over the test fold, concurvity over the pool. The reducer handles it.
+
+        Args:
+            subnet_id: ("main", j) or ("inter", j, k).
+            x: Full-width input matrix (batch, num_features); columns are selected internally.
+
+        Returns:
+            Raw output, shape (batch_size, 1).
+        """
+        kind = subnet_id[0]
+
+        if kind == "main":
+            j = subnet_id[1]
+            feature_input = x[:, j:j + 1]          # (batch, 1), same as main_outputs
+            return self.main_nns[j](feature_input)
+
+        # kind == "inter"
+        j, k = subnet_id[1], subnet_id[2]
+        key = f"{j},{k}"
+        col_j = self._encode_col(x, j)             # (batch, 1) or (batch, n_levels_j)
+        col_k = self._encode_col(x, k)             # (batch, 1) or (batch, n_levels_k)
+        feature_input = torch.cat([col_j, col_k], dim=1)
+        return self.inter_nns[key](feature_input)
 
     # ------------------------------------------------------------------
     # Forward

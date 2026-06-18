@@ -1,27 +1,10 @@
 """
-model_runner.py — the NA2M model layer: build, train, save, load, and extract.
+model_runner.py — train, persist, and extract measures for each NA2M arm.
 
-Owns everything about a model on disk. "Running" a model means producing it
-(by training from a seed) or reconstructing it (by loading from disk — the same
-model, deterministically), then extracting + storing its measures. The
-orchestrator (run_na2m_eval.py) only decides WHERE things go and in WHAT order; it
-never builds a model itself.
-
-The main effects are deterministic given (split, seed), so they are trained ONCE,
-persisted, and every arm branches off that base:
-
-    run_main_effects(..., out_dir=mains_dir)     # train mains, save model.pt, extract arm A
-    mains = load_main_effects(..., mains_dir/"model.pt")
-    run_arm(mains, ..., out_dir=arm_dir, <flags>)# continue from mains, extract arm B/C
-
-run_arm deepcopies the mains base, so it is safe to call repeatedly on the same
-model. A future method is just another set of flags.
-
-Persistence split: the mains model is saved as a state_dict (mains-only, so its
-`main_centers` buffer + params are a COMPLETE snapshot — the dynamic interaction
-dicts are empty). Arm models are NOT persisted; we store their MEASURES instead.
-extract_measures itself (src/na2m/eval/extract.py) still needs implementing — the
-_extract_and_save hook below is where it plugs in.
+The mains are trained once per run and saved to model.pt. Arms B and C deepcopy
+from that checkpoint so they all start from the same base. After each arm finishes
+training, its measures are extracted and saved to measures.pt — the model itself
+is then discarded. Only the mains model.pt is kept on disk; arm models are not.
 """
 
 import copy
@@ -113,16 +96,29 @@ def _extract_and_save(
         config: NA2MConfig (grid_size).
         out_dir: This arm's output dir.
 
-    TODO:
-        - out_dir.mkdir(parents=True, exist_ok=True)
-        - grids = {j: make_grid(feature_meta, j, config.grid_size)
-                   for j in range(model.num_features)}
-        - measures = extract_measures(model, X_pool, X_test, grids, feature_meta)
-        - measures["y_test"] = y_test           # accuracy_summary needs test labels
-        - torch.save(measures, out_dir / "measures.pt")
-        - (out_dir / "done").touch()            # LAST — marks this arm complete
     """
-    raise NotImplementedError
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Ensure eval mode regardless of what state the caller left the model in.
+    # fit_na2m already does this, but _extract_and_save owns this precondition.
+    model.eval()
+
+    # Build per-feature evaluation grids (model space). Shared across runs so
+    # curves from different seeds overlay point-for-point in the shape plots.
+    grids = {j: make_grid(feature_meta, j, config.grid_size) for j in range(model.num_features)}
+
+    # Extract all measures from the live model. This returns everything except y_test.
+    measures = extract_measures(model, X_pool, X_test, grids, feature_meta)
+
+    # y_test lives here rather than in extract_measures because the extractor is
+    # model-only — it has no knowledge of what the correct labels are.
+    measures["y_test"] = y_test
+
+    torch.save(measures, out_dir / "measures.pt")
+
+    # Write the done sentinel LAST. If we crash between torch.save and here the
+    # arm stays un-flagged and the next run will redo it cleanly.
+    (out_dir / "done").touch()
 
 
 def run_main_effects(
@@ -170,6 +166,7 @@ def run_main_effects(
     torch.save(model.state_dict(), out_dir / "model.pt")
 
     # Arm A == the mains model: extract + store its measures, flag done.
+    model.eval()
     X_pool = np.concatenate([X_train, X_val])
     _extract_and_save(model, X_pool, X_test, y_test, feature_meta, config, out_dir)
     return model
@@ -213,7 +210,7 @@ def run_arm(
     *,
     with_interactions: bool,
     with_concurvity_filter: bool,
-) -> dict:
+) -> None:
     """Run ONE arm by continuing from a persisted mains checkpoint, then extract.
 
     Loads the mains from disk, deepcopies (so the checkpoint on disk is never
@@ -232,16 +229,13 @@ def run_arm(
         out_dir: This arm's output dir; receives measures.pt, done.
         with_interactions: False → arm A; True → arm B/C.
         with_concurvity_filter: False → arm B (NoGate); True → arm C (gate on).
-
-    Returns:
-        fit_na2m's result dict: {"model": NA2M, "active_pairs": [...]}.
     """
     set_seed(seed)
     mains_model = load_main_effects(config, feature_meta, X_train.shape[1], mains_model_path)
     model = copy.deepcopy(mains_model)
     train_loader, val_loader, pool_loader = _build_loaders(config, X_train, y_train, X_val, y_val)
 
-    result = fit_na2m(
+    fit_na2m(
         model,
         train_loader,
         val_loader,
@@ -252,9 +246,9 @@ def run_arm(
         mains_pretrained=True,
     )
 
+    model.eval()
     X_pool = np.concatenate([X_train, X_val])
-    _extract_and_save(result["model"], X_pool, X_test, y_test, feature_meta, config, out_dir)
-    return result
+    _extract_and_save(model, X_pool, X_test, y_test, feature_meta, config, out_dir)
 
 
 if __name__ == "__main__":

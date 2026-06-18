@@ -114,25 +114,21 @@ configs are shared across run modes; run outputs are mode-specific:
 
 ```
 runs/compas/
-    fold_k/                           ← tuning outputs, shared across run modes
+    fold_k/
         mains_tuned_config.yaml       ← best main-effects hp (arch + lr + reg)
         gaminet_tuned_config.yaml     ← mains hp + tuned clarity λ for arm B
         concurvity_tuned_config.yaml  ← mains hp + tuned clarity λ for arm C
-    fixed/fold_k/                     ← run outputs for run_mode="fixed"
-        mains/run_i/
-            model.pt                  ← trained mains checkpoint (arm A)
-            measures.pt               ← extracted per-term outputs + test logits
-            done                      ← sentinel: written last, guards resume
-        gaminet/run_i/
-            measures.pt
-            done
-        concurvity/run_i/
-            measures.pt
-            done
-    subsample/fold_k/                 ← run outputs for run_mode="subsample"
-        mains/run_i/  ...
-        gaminet/run_i/  ...
-        concurvity/run_i/  ...
+        <run_mode>/                   ← "fixed" or "subsample"
+            mains/run_i/
+                model.pt              ← trained mains checkpoint (arm A)
+                measures.pt           ← extracted per-term outputs + test logits
+                done                  ← sentinel: written last, guards resume
+            gaminet/run_i/
+                measures.pt
+                done
+            concurvity/run_i/
+                measures.pt
+                done
 ```
 
 Tuning is done once per fold regardless of how many run modes you evaluate.
