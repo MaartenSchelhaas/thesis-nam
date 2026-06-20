@@ -15,27 +15,26 @@ Requires Python 3.10+. Core dependencies: `torch`, `numpy`, `pandas`, `scikit-le
 ```
 thesis-nam/
 ├── src/nam/                  # NAM reproduction package (frozen baseline)
-│   ├── models/               # NAM, FeatureNN, activation layers
-│   ├── data/                 # data loading + preprocessing
-│   ├── training/             # trainer, losses, metrics
-│   └── utils/                # config dataclass
 ├── src/na2m/                 # NA2M extension (concurvity-aware, GAMI-Net-style)
 │   ├── models/               # CategNet, NA2M (type-aware mains + dynamic pairwise interactions)
 │   ├── data/                 # route-2 path: integer-coded cats, grids, density
 │   ├── training/             # fit_na2m staged orchestrator (stages 1–3)
-│   ├── selection/            # FAST interaction screen (interpret/EBM wrapper)
+│   ├── selection/            # FAST interaction screen + selection policy
 │   ├── eval/                 # extract measures + reduce metrics (building blocks)
 │   └── utils/                # NA2MConfig + concurvity (shared adj-R² helper)
-├── configs/
-│   ├── compas_baseline.yaml  # fixed hyperparams from the paper
-│   ├── compas_search.yaml    # search space definition for tuning
-│   └── compas_tuned.yaml     # best params found by tune_nam.py (generated)
+├── configs/                    
+│   └── compas_na2m_search.yaml #Config file for hyperparameter search space.
 ├── scripts/                  # drivers that use the models (logic lives in src/)
-│   ├── nam/                  # NAM drivers: train, evaluate, tune_nam, run_nam
-│   └── na2m/                 # NA2M drivers: run_na2m_eval (k-fold×seed×arm loop)
+│   ├── nam/                  # NAM drivers: train, evaluate, tune_nam, run_nam (old reproduction)
+│   └── na2m/
+│       ├── run_na2m_eval.py  # main entry point: k-fold × n_runs × 3-arm loop
+│       ├── model_runner.py   # train one arm, extract measures, write done sentinel
+│       ├── tune_main_na2m.py # Optuna Stage-1 hp search (lr, dropout, arch)
+│       ├── tune_clarity.py   # Optuna clarity_regularization search over Stage 2/3
+│       └── reduce_fold0.py   # compute + print all metrics for one fold; save shape plots
 ├── runs/                     # training outputs: checkpoints, metrics (gitignored)
 ├── notebooks/                # experiments, exploration, figures
-├── tests/                    # pytest tests
+├── tests/                    # pytest tests, empty
 └── datasets/                 # raw/ CSV files (gitignored)
 ```
 
@@ -96,16 +95,21 @@ selection-time gate, so B and C stay byte-identical except for the gate.)
 
 ### Evaluation: store-everything → reducer
 
-Models are **ephemeral**. Per `(arm, fold, seed)` the harness trains once and
-`extract_measures` persists **raw** per-term output vectors (on both the pool and
-the held-out test fold), test logits, and the selected pair set. Every headline
-metric — term stability across seeds, selection-set Jaccard, the adj-R²
-concurvity diagnostic, and accuracy vs. term-count — is then a **pure function of
-those stored measures**, computed in `eval/reduce.py`. Changing or adding a
-metric never requires retraining. The k-fold split is keyed off the fold so that
-varying the seed varies only initialization, isolating optimization variance.
+Per `(arm, fold, seed)` the evaluator trains once and immediately extracts
+everything needed from the live in memory model. `extract_measures` (`src/na2m/eval/extract.py`)
+stores four things to `measures.pt`: raw per-subnet output vectors on the pool
+(for the post-hoc concurvity score) and the test fold (for stability); summed
+test logits (for accuracy); the selected pair list; and centered main-effect shape
+curves evaluated on a fixed real-unit grid. The model is then discarded — arms B
+and C do not write a `model.pt`.
 
-The build status of each piece is tracked in `docs/todo.md`.
+Every headline metric is a **pure function of those stored measures**, computed
+from measures on disk by `eval/reduce.py`. `load_fold` walks a fold directory and returns a
+dict of completed run dicts; metric functions (`main_effect_instability`,
+`mean_pairwise_jaccard`, `concurvity_summary`, `accuracy_summary`, `shape_plots`)
+take that dict and return scalars or figures without touching any model.
+Changing or adding a metric never requires retraining.
+
 
 ### Run output layout
 
