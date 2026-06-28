@@ -40,7 +40,7 @@ from scripts.na2m.model_runner import (
 )
 from scripts.na2m.tune_main_na2m import tune_fold
 from scripts.na2m.tune_clarity import tune_clarity_fold
-from scripts.na2m.tune_concurvity_reg import sweep_lambda2_fold
+from scripts.na2m.tune_concurvity_reg import concurvity_reg_fold
 
 
 # --------------------------------------------------------------------------- #
@@ -285,10 +285,14 @@ def run_fold(
     if not mains_config_path.exists():
         mains_space = {k: v for k, v in search_space.items() if k != "marginal_clarity"}
         tune_fold(
-            fixed_params, mains_space, feature_meta,
-            X[tune_idx], y[tune_idx],
-            X[tune_val_idx], y[tune_val_idx],
-            mains_config_path,
+            fixed_params=fixed_params,
+            search_space=mains_space,
+            feature_meta=feature_meta,
+            X_train=X[tune_idx],
+            y_train=y[tune_idx],
+            X_val=X[tune_val_idx],
+            y_val=y[tune_val_idx],
+            output_path=mains_config_path,
             study_name=f"fold_{fold_idx}_main_search",
         )
 
@@ -302,13 +306,15 @@ def run_fold(
         if arm_config_path.exists():
             continue
         tune_clarity_fold(
-            mains_config_path,
-            fixed_params["clarity_n_trials"],
-            search_space["marginal_clarity"],
-            feature_meta,
-            X[tune_idx], y[tune_idx],
-            X[tune_val_idx], y[tune_val_idx],
-            arm_config_path,
+            mains_config_path=mains_config_path,
+            n_trials=fixed_params["clarity_n_trials"],
+            search_spec=search_space["marginal_clarity"],
+            feature_meta=feature_meta,
+            X_train=X[tune_idx],
+            y_train=y[tune_idx],
+            X_val=X[tune_val_idx],
+            y_val=y[tune_val_idx],
+            output_path=arm_config_path,
             with_concurvity_filter=with_concurvity_filter,
             study_name=f"fold_{fold_idx}_{arm}_clarity_search",
         )
@@ -319,14 +325,16 @@ def run_fold(
     n_sweep_seeds = fixed_params.get("n_sweep_seeds", 1)
     gaminet_config_path = tune_dir / "gaminet_tuned_config.yaml"
     if lambda2_grid and gaminet_config_path.exists() and not sweep_csv.exists():
-        sweep_lambda2_fold(
+        concurvity_reg_fold(
             mains_config_path=mains_config_path,
             gaminet_config_path=gaminet_config_path,
             lambda2_grid=lambda2_grid,
             n_sweep_seeds=n_sweep_seeds,
             feature_meta=feature_meta,
-            X_pool=X[pool_idx],
-            y_pool=y[pool_idx],
+            X_tune=X[tune_idx],
+            y_tune=y[tune_idx],
+            X_tune_val=X[tune_val_idx],
+            y_tune_val=y[tune_val_idx],
             out_dir=tune_dir,
             eta_prune=fixed_params.get("eta_prune", 0.0),
         )
