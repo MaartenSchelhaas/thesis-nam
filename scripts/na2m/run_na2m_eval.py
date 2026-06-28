@@ -420,7 +420,7 @@ def main() -> None:
     RUN_MODE  = "fixed"        # "fixed" | "subsample"
     N_RUNS    = 20
     N_FOLDS   = 5
-    BASE_DIR  = Path("runs/compas")
+    BASE_DIR  = Path("runs/compas_na2m")
     FRESH     = False          # True → delete BASE_DIR/<run_mode> first
     # -------------------------------------------------------------------- #
 

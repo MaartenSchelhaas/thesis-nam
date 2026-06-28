@@ -24,6 +24,10 @@ values and would only inject noise if repeated.
 The fold's tuning split (X_tune / X_tune_val) is passed in by run_fold, the
 same arrays tune_clarity_fold already uses for this fold. This guarantees
 lambda_2 is evaluated on the same split as lambda_1.
+
+CSV format: one row per (lambda_2, seed) — the raw per-run results.
+Aggregation (mean ± std across seeds) is computed on the fly for the plot
+and elbow rule; it is not stored separately.
 """
 
 import copy
@@ -155,6 +159,89 @@ def _compute_r_perp(
     return float(np.mean(np.abs(corr[row_idx, col_idx])))
 
 
+def _aggregate_by_lambda(
+    rows: list[dict],
+    sorted_grid: list[float],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Compute mean and std of val_loss and r_perp per lambda_2 across seeds.
+
+    Args:
+        rows: Raw sweep results — one dict per (lambda_2, seed) with keys
+              lambda2, seed, val_loss, r_perp.
+        sorted_grid: lambda_2 values in ascending order.
+
+    Returns:
+        (mean_losses, std_losses, mean_r_perps, std_r_perps) — each shape (n_grid,).
+    """
+    mean_losses, std_losses, mean_r_perps, std_r_perps = [], [], [], []
+    for lam in sorted_grid:
+        subset  = [r for r in rows if r["lambda2"] == lam]
+        losses  = [r["val_loss"] for r in subset]
+        r_perps = [r["r_perp"]   for r in subset]
+        mean_losses.append(np.mean(losses))
+        std_losses.append(np.std(losses))
+        mean_r_perps.append(np.mean(r_perps))
+        std_r_perps.append(np.std(r_perps))
+    return (
+        np.array(mean_losses),
+        np.array(std_losses),
+        np.array(mean_r_perps),
+        np.array(std_r_perps),
+    )
+
+
+def _plot_sweep(
+    sorted_grid: list[float],
+    mean_losses: np.ndarray,
+    std_losses: np.ndarray,
+    mean_r_perps: np.ndarray,
+    std_r_perps: np.ndarray,
+    auto_lambda2: float,
+    out_dir: Path,
+) -> Path:
+    """Write the two-panel lambda_2 tradeoff plot to out_dir.
+
+    Left panel: val loss vs lambda_2. Right panel: R_perp vs lambda_2.
+    Both use a log x-axis with mean ± std shading and a dashed vertical line
+    at the auto-elbow lambda_2.
+
+    Args:
+        sorted_grid: lambda_2 values in ascending order (x-axis).
+        mean_losses, std_losses: Per-lambda_2 aggregates for val loss.
+        mean_r_perps, std_r_perps: Per-lambda_2 aggregates for R_perp.
+        auto_lambda2: Auto-elbow value — shown as a dashed vertical line.
+        out_dir: Directory to write regularized_lambda2_sweep.png.
+
+    Returns:
+        Path to the written plot file.
+    """
+    x = np.array(sorted_grid)
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
+
+    ax1.semilogx(x, mean_losses, marker="o")
+    ax1.fill_between(x, mean_losses - std_losses, mean_losses + std_losses, alpha=0.2)
+    ax1.axvline(auto_lambda2, linestyle="--", color="red", label=f"auto λ₂={auto_lambda2}")
+    ax1.set_xlabel("λ₂")
+    ax1.set_ylabel("val loss")
+    ax1.set_title("Val loss vs λ₂")
+    ax1.legend()
+
+    ax2.semilogx(x, mean_r_perps, marker="o")
+    ax2.fill_between(x, mean_r_perps - std_r_perps, mean_r_perps + std_r_perps, alpha=0.2)
+    ax2.axvline(auto_lambda2, linestyle="--", color="red", label=f"auto λ₂={auto_lambda2}")
+    ax2.set_xlabel("λ₂")
+    ax2.set_ylabel("R_perp")
+    ax2.set_title("R_perp vs λ₂")
+    ax2.legend()
+
+    fig.tight_layout()
+    plot_path = out_dir / "regularized_lambda2_sweep.png"
+    fig.savefig(plot_path, dpi=150)
+    plt.close(fig)
+    return plot_path
+
+
 # --------------------------------------------------------------------------- #
 # Fold-level grid sweep                                                        #
 # --------------------------------------------------------------------------- #
@@ -244,60 +331,23 @@ def concurvity_reg_fold(
             rows.append({"lambda2": lambda_2, "seed": seed, "val_loss": loss, "r_perp": r_perp})
             print(f"  lambda_2={lambda_2:.5f}  seed={seed}  val_loss={loss:.4f}  r_perp={r_perp:.4f}")
 
-    # Write CSV
     csv_path = out_dir / "regularized_lambda2_sweep.csv"
     with open(csv_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=["lambda2", "seed", "val_loss", "r_perp"])
         writer.writeheader()
         writer.writerows(rows)
 
-    # Per-lambda_2 mean/std over seeds, sorted ascending for plotting
     sorted_grid = sorted(lambda2_grid)
-    mean_losses, std_losses, mean_r_perps, std_r_perps = [], [], [], []
-    for lam in sorted_grid:
-        subset  = [r for r in rows if r["lambda2"] == lam]
-        losses  = [r["val_loss"] for r in subset]
-        r_perps = [r["r_perp"]   for r in subset]
-        mean_losses.append(np.mean(losses))
-        std_losses.append(np.std(losses))
-        mean_r_perps.append(np.mean(r_perps))
-        std_r_perps.append(np.std(r_perps))
+    mean_losses, std_losses, mean_r_perps, std_r_perps = _aggregate_by_lambda(rows, sorted_grid)
 
     # Elbow: pass losses in descending lambda_2 order so _eta_cut returns the
     # largest lambda_2 still within eta of the minimum loss.
-    descending_losses = list(reversed(mean_losses))
-    cut_idx      = _eta_cut(descending_losses, eta_prune)
+    cut_idx      = _eta_cut(list(reversed(mean_losses)), eta_prune)
     auto_lambda2 = list(reversed(sorted_grid))[cut_idx]
 
-    # Two-panel tradeoff plot
-    x              = np.array(sorted_grid)
-    mean_losses_a  = np.array(mean_losses)
-    std_losses_a   = np.array(std_losses)
-    mean_r_perps_a = np.array(mean_r_perps)
-    std_r_perps_a  = np.array(std_r_perps)
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
-
-    ax1.semilogx(x, mean_losses_a, marker="o")
-    ax1.fill_between(x, mean_losses_a - std_losses_a, mean_losses_a + std_losses_a, alpha=0.2)
-    ax1.axvline(auto_lambda2, linestyle="--", color="red", label=f"auto λ₂={auto_lambda2}")
-    ax1.set_xlabel("λ₂")
-    ax1.set_ylabel("val loss")
-    ax1.set_title("Val loss vs λ₂")
-    ax1.legend()
-
-    ax2.semilogx(x, mean_r_perps_a, marker="o")
-    ax2.fill_between(x, mean_r_perps_a - std_r_perps_a, mean_r_perps_a + std_r_perps_a, alpha=0.2)
-    ax2.axvline(auto_lambda2, linestyle="--", color="red", label=f"auto λ₂={auto_lambda2}")
-    ax2.set_xlabel("λ₂")
-    ax2.set_ylabel("R_perp")
-    ax2.set_title("R_perp vs λ₂")
-    ax2.legend()
-
-    fig.tight_layout()
-    plot_path = out_dir / "regularized_lambda2_sweep.png"
-    fig.savefig(plot_path, dpi=150)
-    plt.close(fig)
+    plot_path = _plot_sweep(
+        sorted_grid, mean_losses, std_losses, mean_r_perps, std_r_perps, auto_lambda2, out_dir
+    )
 
     print(f"\n[sweep_lambda2] Auto-elbow lambda_2 = {auto_lambda2}")
     print(f"[sweep_lambda2] Plot:  {plot_path}")
