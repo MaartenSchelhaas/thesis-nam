@@ -49,6 +49,7 @@ class Trainer:
         val_check_interval: int,
         run_dir: str | None = None,
         clarity_lambda: float = 0.0,
+        concurvity_lambda: float = 0.0,
     ):
         """Initialise the NA2M Trainer.
 
@@ -66,6 +67,8 @@ class Trainer:
             clarity_lambda (float): Coefficient for the marginal-clarity penalty.
                             0.0 (default) disables it — correct for Stage 1.
                             Stages 2 and 3 pass hp.clarity_lambda.
+            concurvity_lambda (float): Coefficient for the Siems et al. R_perp pairwise
+                            concurvity regularizer (arm D Stage 3 only). 0.0 disables it.
         """
         self.model = model
         self.output_regularization = output_regularization
@@ -75,6 +78,7 @@ class Trainer:
         self.patience = patience
         self.val_check_interval = val_check_interval
         self.clarity_lambda = clarity_lambda
+        self.concurvity_lambda = concurvity_lambda
 
         if run_dir is not None:
             self.run_dir = Path(run_dir)
@@ -138,6 +142,9 @@ class Trainer:
             # measured on the training batch, as in GAMI-Net train_interaction.
             if self.clarity_lambda > 0.0 and hasattr(self.model, "clarity_loss"):
                 loss = loss + self.clarity_lambda * self.model.clarity_loss(X_batch)
+
+            if self.concurvity_lambda > 0.0 and hasattr(self.model, "concurvity_reg_loss"):
+                loss = loss + self.concurvity_lambda * self.model.concurvity_reg_loss(X_batch)
 
             loss.backward()
             self.optimizer.step()

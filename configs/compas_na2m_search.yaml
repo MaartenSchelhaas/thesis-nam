@@ -23,6 +23,10 @@ finetune_epochs: 100
 concurvity_threshold: 0.5
 clarity_n_trials: 15
 
+# --- Arm D lambda_2 grid sweep (tune_concurvity_reg.py) ---
+lambda2_grid: [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0]
+n_sweep_seeds: 3
+
 # --- Main-effects search space (tune_na2m.py) ---
 # clarity_regularization is intentionally absent — it is tuned separately by
 # tune_clarity.py and written directly into the tuned config YAML.

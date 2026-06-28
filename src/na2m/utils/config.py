@@ -35,7 +35,8 @@ class NA2MConfig:
 
     output_regularization: float = 0.0
     l2_regularization: float = 0.0
-    clarity_regularization: float = 0.0  # λ on the GAMI-Net marginal-clarity penalty (stage 3)
+    clarity_regularization: float = 0.0  # λ_1 on the GAMI-Net marginal-clarity penalty (stage 3)
+    concurvity_regularization: float = 0.0  # λ_2 on the Siems et al. R_perp pairwise concurvity penalty (stage 3, arm D only)
 
     # ------------------------------------------------------------------ #
     # Optimiser                                                            #

@@ -494,3 +494,32 @@ class NA2M(nn.Module):
             penalty = penalty + (f_j * f_jk).mean().abs() + (f_k * f_jk).mean().abs()
 
         return penalty
+
+    # ------------------------------------------------------------------
+    # Siems et al. (NeurIPS 2023) pairwise concurvity regularizer
+    # ------------------------------------------------------------------
+
+    def concurvity_reg_loss(self, x: torch.Tensor) -> torch.Tensor:
+        """Mean absolute pairwise Pearson correlation of all additive component outputs.
+
+        Implements R_perp from Siems et al. 2023 — the mean of |Corr(f_i, f_j)| over
+        all C(p, 2) unordered pairs of additive component output vectors (K mains +
+        |S_2| interactions). Returns 0 when fewer than 2 components are active.
+
+        Unlike clarity_loss, this is location-invariant: no pool-centering precondition.
+        Batch-centering is handled internally by torch.corrcoef.
+
+        Args:
+            x: Input batch, shape (batch_size, num_features).
+
+        Returns:
+            Scalar tensor — R_perp in [0, 1].
+        """
+        # TODO: collect all p component output vectors via main_outputs(x) + inter_outputs(x)
+        # TODO: if p < 2, return torch.zeros(1, device=self._bias.device)
+        # TODO: stack into F of shape (batch, p), then transpose to (p, batch)
+        # TODO: corr = torch.corrcoef(F_t)  — (p, p) Pearson matrix, NaN for zero-variance rows
+        # TODO: corr = torch.nan_to_num(corr, nan=0.0)
+        # TODO: n_pairs = p * (p - 1) // 2
+        # TODO: return corr.triu(diagonal=1).abs().sum() / n_pairs
+        raise NotImplementedError

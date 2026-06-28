@@ -43,14 +43,15 @@ def fit_na2m(
     passing it for arms B or C, since fit_na2m modifies it in place.
 
     Args:
-        model: NA2M to train. For arm A: freshly initialised. For arms B/C: a
+        model: NA2M to train. For arm A: freshly initialised. For arms B/C/D: a
                deepcopy of the already-trained mains model.
         train_loader: Training split (same split used for all seeds within a fold).
         val_loader: Validation split (same split used for all seeds within a fold).
         pool_loader: Full 80% pool — centering reference.
-        config: Hyperparameters.
+        config: Hyperparameters. config.concurvity_regularization > 0 activates
+                the R_perp penalty in Stage 3 (arm D); 0.0 disables it (arms B/C).
         with_interactions: False → arm A (stage 1 only).
-        with_concurvity_filter: True → arm C (concurvity gate in stage 2); False → arm B.
+        with_concurvity_filter: True → arm C (concurvity gate in stage 2); False → arm B/D.
         mains_pretrained: If True, skip stage 1 (model already has trained mains).
         trial: Optuna trial for stage-1 pruning; ignored when mains_pretrained=True.
     """
@@ -366,7 +367,8 @@ def stage3_finetune(
 ) -> None:
     """Fine-tune all params once with the clarity penalty, then recenter.
 
-    This is the model's only fine-tune, for both arm B and arm C.
+    This is the model's only fine-tune, for arms B, C, and D.
+    hp.concurvity_regularization drives the R_perp term — 0.0 disables it (arms B/C).
 
     Args:
         model: NA2M instance (interactions selected & pruned, all params unfrozen).
@@ -386,6 +388,7 @@ def stage3_finetune(
         patience=hp.patience,
         val_check_interval=hp.val_check_interval,
         clarity_lambda=hp.clarity_regularization,
+        concurvity_lambda=hp.concurvity_regularization,
     )
     finetune_trainer.train(train_loader, val_loader)
     finetune_trainer.load_best()
