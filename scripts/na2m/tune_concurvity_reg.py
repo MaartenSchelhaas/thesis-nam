@@ -43,7 +43,7 @@ from torch.utils.data import DataLoader
 
 from na2m.data.dataset import NAMDataset
 from na2m.models.na2m import NA2M
-from na2m.training.fit_na2m import stage1_main, stage2_select, stage3_finetune, _eta_cut
+from na2m.training.fit_na2m import stage1_main, stage2_select, stage3_finetune
 from na2m.training.losses import base_loss
 from na2m.selection.policy import NoGate
 from na2m.utils.config import NA2MConfig, load_na2m_config
@@ -196,20 +196,17 @@ def _plot_sweep(
     std_losses: np.ndarray,
     mean_r_perps: np.ndarray,
     std_r_perps: np.ndarray,
-    auto_lambda2: float,
     out_dir: Path,
 ) -> Path:
     """Write the two-panel lambda_2 tradeoff plot to out_dir.
 
     Left panel: val loss vs lambda_2. Right panel: R_perp vs lambda_2.
-    Both use a log x-axis with mean ± std shading and a dashed vertical line
-    at the auto-elbow lambda_2.
+    Both use a log x-axis with mean ± std shading.
 
     Args:
         sorted_grid: lambda_2 values in ascending order (x-axis).
         mean_losses, std_losses: Per-lambda_2 aggregates for val loss.
         mean_r_perps, std_r_perps: Per-lambda_2 aggregates for R_perp.
-        auto_lambda2: Auto-elbow value — shown as a dashed vertical line.
         out_dir: Directory to write regularized_lambda2_sweep.png.
 
     Returns:
@@ -221,19 +218,15 @@ def _plot_sweep(
 
     ax1.semilogx(x, mean_losses, marker="o")
     ax1.fill_between(x, mean_losses - std_losses, mean_losses + std_losses, alpha=0.2)
-    ax1.axvline(auto_lambda2, linestyle="--", color="red", label=f"auto λ₂={auto_lambda2}")
     ax1.set_xlabel("λ₂")
     ax1.set_ylabel("val loss")
     ax1.set_title("Val loss vs λ₂")
-    ax1.legend()
 
     ax2.semilogx(x, mean_r_perps, marker="o")
     ax2.fill_between(x, mean_r_perps - std_r_perps, mean_r_perps + std_r_perps, alpha=0.2)
-    ax2.axvline(auto_lambda2, linestyle="--", color="red", label=f"auto λ₂={auto_lambda2}")
     ax2.set_xlabel("λ₂")
     ax2.set_ylabel("R_perp")
     ax2.set_title("R_perp vs λ₂")
-    ax2.legend()
 
     fig.tight_layout()
     plot_path = out_dir / "regularized_lambda2_sweep.png"
@@ -257,8 +250,6 @@ def concurvity_reg_fold(
     X_tune_val: np.ndarray,
     y_tune_val: np.ndarray,
     out_dir: Path,
-    *,
-    eta_prune: float = 0.0,
 ) -> Path:
     """Grid sweep over lambda_2 for a single fold. Writes CSV + tradeoff plot.
 
@@ -280,7 +271,6 @@ def concurvity_reg_fold(
         X_tune, y_tune: Fold's inner training split (same arrays used by tune_clarity_fold).
         X_tune_val, y_tune_val: Fold's inner validation split.
         out_dir: Fold config dir; receives regularized_lambda2_sweep.csv and .png.
-        eta_prune: Tolerance for the elbow rule (same value as Stage 2's η-cut).
 
     Returns:
         Path to the written CSV.
@@ -340,17 +330,11 @@ def concurvity_reg_fold(
     sorted_grid = sorted(lambda2_grid)
     mean_losses, std_losses, mean_r_perps, std_r_perps = _aggregate_by_lambda(rows, sorted_grid)
 
-    # Elbow: pass losses in descending lambda_2 order so _eta_cut returns the
-    # largest lambda_2 still within eta of the minimum loss.
-    cut_idx      = _eta_cut(list(reversed(mean_losses)), eta_prune)
-    auto_lambda2 = list(reversed(sorted_grid))[cut_idx]
-
     plot_path = _plot_sweep(
-        sorted_grid, mean_losses, std_losses, mean_r_perps, std_r_perps, auto_lambda2, out_dir
+        sorted_grid, mean_losses, std_losses, mean_r_perps, std_r_perps, out_dir
     )
 
-    print(f"\n[sweep_lambda2] Auto-elbow lambda_2 = {auto_lambda2}")
-    print(f"[sweep_lambda2] Plot:  {plot_path}")
+    print(f"\n[sweep_lambda2] Plot:  {plot_path}")
     print(f"[sweep_lambda2] CSV:   {csv_path}")
     print(f"[sweep_lambda2] Inspect the plot, then confirm with:")
     print(f"    python scripts/na2m/confirm_regularized_arm.py")

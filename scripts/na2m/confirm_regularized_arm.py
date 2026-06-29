@@ -16,7 +16,6 @@ What this writes per confirmed fold:
     regularized_config_meta.yaml
         Source-tracking only (not loaded by NA2MConfig):
             confirmed_lambda2    — the value that was written
-            lambda2_auto_pick    — elbow suggestion computed from the sweep CSV
             lambda1_from_gaminet — the clarity_regularization value copied from gaminet
             reason               — optional human note
             confirmed_at         — ISO timestamp
@@ -26,51 +25,15 @@ Usage:
         python scripts/na2m/confirm_regularized_arm.py
 """
 
-import csv
 from datetime import datetime, timezone
 from pathlib import Path
 
-import numpy as np
 import yaml
-
-from na2m.training.fit_na2m import _eta_cut
-
-
-def _auto_pick_from_csv(sweep_csv: Path, eta_prune: float) -> float:
-    """Compute the elbow lambda_2 suggestion from the sweep CSV.
-
-    Reads (lambda2, seed, val_loss, r_perp) rows, averages val_loss per lambda_2,
-    and applies the same eta_prune elbow rule used during the sweep (descending
-    lambda_2 order so _eta_cut returns the largest lambda_2 within tolerance).
-
-    Args:
-        sweep_csv: Path to regularized_lambda2_sweep.csv.
-        eta_prune: Tolerance for the elbow rule.
-
-    Returns:
-        Auto-suggested lambda_2 value.
-    """
-    rows = []
-    with open(sweep_csv, newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            rows.append({"lambda2": float(row["lambda2"]), "val_loss": float(row["val_loss"])})
-
-    sorted_grid = sorted(set(r["lambda2"] for r in rows))
-    mean_losses = []
-    for lam in sorted_grid:
-        losses = [r["val_loss"] for r in rows if r["lambda2"] == lam]
-        mean_losses.append(float(np.mean(losses)))
-
-    descending_losses = list(reversed(mean_losses))
-    cut_idx = _eta_cut(descending_losses, eta_prune)
-    return list(reversed(sorted_grid))[cut_idx]
 
 
 def _confirm_fold(
     fold_dir: Path,
     lambda2: float,
-    eta_prune: float,
     reason: str,
     overwrite: bool,
 ) -> None:
@@ -99,8 +62,6 @@ def _confirm_fold(
         gaminet_raw = yaml.safe_load(f)
     lambda_1 = gaminet_raw["clarity_regularization"]
 
-    auto_pick = _auto_pick_from_csv(sweep_csv, eta_prune)
-
     output_config = mains_raw | {
         "clarity_regularization":    lambda_1,
         "concurvity_regularization": lambda2,
@@ -110,7 +71,6 @@ def _confirm_fold(
 
     meta = {
         "confirmed_lambda2":    lambda2,
-        "lambda2_auto_pick":    auto_pick,
         "lambda1_from_gaminet": lambda_1,
         "reason":               reason,
         "confirmed_at":         datetime.now(timezone.utc).isoformat(),
@@ -119,7 +79,6 @@ def _confirm_fold(
         yaml.dump(meta, f, default_flow_style=False, sort_keys=False)
 
     print(f"  lambda_1 (from gaminet) : {lambda_1}")
-    print(f"  lambda_2 auto-pick      : {auto_pick}")
     print(f"  lambda_2 confirmed      : {lambda2}")
     print(f"  Written: {output_config_yaml}")
     print(f"  Written: {output_meta_yaml}")
@@ -127,26 +86,21 @@ def _confirm_fold(
 
 def main() -> None:
     # ── Edit these before running ───────────────────────────────────────────
-    base_dir    = Path(r"runs/compas_na2m")
-    config_path = Path(r"configs/compas_na2m_search.yaml")
-    n_folds     = 5
-    reason      = ""      # optional note explaining the choice (applied to all folds)
-    overwrite   = False   # set True to overwrite existing configs
+    base_dir  = Path(r"runs/compas_na2m")
+    n_folds   = 5
+    reason    = ""      # optional note explaining the choice (applied to all folds)
+    overwrite = False   # set True to overwrite existing configs
 
     # Set lambda_2 per fold after inspecting each fold's sweep plot.
     # Leave as None to skip that fold (not yet confirmed).
     lambda2_per_fold = {
-        0: None,
-        1: None,
-        2: None,
-        3: None,
-        4: None,
+        0: 1,
+        1: 0.1,
+        2: 1,
+        3: 1,
+        4: 1,
     }
     # ────────────────────────────────────────────────────────────────────────
-
-    with open(config_path) as f:
-        raw = yaml.safe_load(f)
-    eta_prune = raw.get("eta_prune", 0.0)
 
     for fold_idx in range(n_folds):
         fold_dir  = base_dir / f"fold_{fold_idx}"
@@ -158,13 +112,11 @@ def main() -> None:
             continue
 
         if lambda2 is None:
-            auto_pick = _auto_pick_from_csv(sweep_csv, eta_prune)
-            print(f"[fold_{fold_idx}] Not yet confirmed. Auto-pick suggestion: {auto_pick}  "
-                  f"(plot: {fold_dir / 'regularized_lambda2_sweep.png'})")
+            print(f"[fold_{fold_idx}] Not yet confirmed — inspect: {fold_dir / 'regularized_lambda2_sweep.png'}")
             continue
 
         print(f"[fold_{fold_idx}] Confirming lambda_2={lambda2}...")
-        _confirm_fold(fold_dir, lambda2, eta_prune, reason, overwrite)
+        _confirm_fold(fold_dir, lambda2, reason, overwrite)
 
 
 if __name__ == "__main__":

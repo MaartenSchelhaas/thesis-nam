@@ -4,7 +4,7 @@ run_na2m_eval.py — k-fold × n_runs evaluation loop for all three NA2M arms.
 Call stack (each level owns one responsibility):
     evaluate_na2m  → outer k-fold loop, seed derivation
       └ run_fold   → tune + store configs once per fold, loop over runs
-          └ run_arms → train mains once, branch arms B/C off the same checkpoint
+          └ run_arms → train mains once, branch arms B/C/D off the same checkpoint
 
 run_mode controls the inner train/val split strategy:
     "fixed"     → same split every run within a fold (used for stability evaluation)
@@ -336,7 +336,6 @@ def run_fold(
             X_tune_val=X[tune_val_idx],
             y_tune_val=y[tune_val_idx],
             out_dir=tune_dir,
-            eta_prune=fixed_params.get("eta_prune", 0.0),
         )
 
     mains_config = load_na2m_config(str(mains_config_path))
