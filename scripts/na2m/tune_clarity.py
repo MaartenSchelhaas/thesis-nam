@@ -56,7 +56,7 @@ from na2m.data.dataset import NAMDataset
 from na2m.models.na2m import NA2M
 from na2m.training.fit_na2m import stage1_main, stage2_select, stage3_finetune
 from na2m.selection.policy import NoGate, ConcurvityGate
-from na2m.training.metrics import auroc
+from na2m.training.metrics import auroc, rmse
 from na2m.utils.config import NA2MConfig, load_na2m_config
 
 
@@ -112,8 +112,11 @@ def _build_loaders(
     return train_loader, val_loader, pool_loader
 
 
-def _val_auroc(model: NA2M, val_loader: DataLoader) -> float:
-    """Validation AUROC of the current model (eval mode, no grad)."""
+def _val_metric(model: NA2M, val_loader: DataLoader, task: str) -> float:
+    """Validation metric of the current model (eval mode, no grad).
+
+    Returns AUROC for classification, RMSE for regression.
+    """
     model.eval()
     device = next(model.parameters()).device
     all_logits, all_targets = [], []
@@ -122,7 +125,11 @@ def _val_auroc(model: NA2M, val_loader: DataLoader) -> float:
             logits, _ = model(X_batch.to(device))
             all_logits.append(logits.cpu())
             all_targets.append(y_batch)
-    return float(auroc(torch.cat(all_logits), torch.cat(all_targets)))
+    logits = torch.cat(all_logits)
+    targets = torch.cat(all_targets)
+    if task == "regression":
+        return float(rmse(logits, targets))
+    return float(auroc(logits, targets))
 
 
 # --------------------------------------------------------------------------- #
@@ -180,7 +187,7 @@ def objective_clarity(
     stage2_select(model, train_loader, val_loader, pool_loader, cfg, selection_policy=policy)
     stage3_finetune(model, train_loader, val_loader, pool_loader, cfg)
 
-    return _val_auroc(model, val_loader)
+    return _val_metric(model, val_loader, config.task)
 
 
 # --------------------------------------------------------------------------- #
@@ -236,9 +243,10 @@ def tune_clarity_fold(
     stage1_snapshot = copy.deepcopy(stage1_model)
     print("[clarity] Stage-1 mains snapshot ready. Searching clarity over Stage 2/3...")
 
+    direction = "minimize" if config.task == "regression" else "maximize"
     study = optuna.create_study(
         study_name=study_name,
-        direction="maximize",
+        direction=direction,
         sampler=optuna.samplers.TPESampler(),
     )
     study.optimize(
