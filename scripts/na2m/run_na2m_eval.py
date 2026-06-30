@@ -24,6 +24,8 @@ Output layout:
                 mains/run_i/      model.pt, measures.pt, done
                 gaminet/run_i/    measures.pt, done
                 concurvity/run_i/ measures.pt, done
+
+run with: python -m scripts.na2m.run_na2m_eval                
 """
 
 from pathlib import Path
