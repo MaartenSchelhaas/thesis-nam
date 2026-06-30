@@ -1,6 +1,6 @@
 """
 reduce_fold0.py — compute and display all reducer metrics for fold_0.
-Run from repo root: python -m notebooks.reduce_fold0
+Run from repo root: python -m scripts.na2m.reduce_fold0
 """
 from pathlib import Path
 
@@ -45,14 +45,14 @@ def main() -> None:
 
     # --- Main-effect instability (headline) ---
     _section("Main-effect instability  [lower = more stable]")
-    for arm in ("mains", "gaminet", "concurvity"):
+    for arm in ("mains", "gaminet", "concurvity", "regularized"):
         if fold.get(arm):
             val = main_effect_instability(fold, arm)
             print(f"  {arm:12s}  {val:.6f}")
 
     # --- Selection frequencies + mean pairwise Jaccard ---
     _section("Interaction selection frequencies  [fraction of runs selecting each pair]")
-    for arm in ("gaminet", "concurvity"):
+    for arm in ("gaminet", "concurvity", "regularized"):
         if fold.get(arm):
             freqs = selection_frequencies(fold, arm)
             mpj = mean_pairwise_jaccard(fold, arm)
@@ -66,7 +66,7 @@ def main() -> None:
 
     # --- Post-hoc concurvity ---
     _section("Post-hoc concurvity (adj-R², fine-tuned model on pool, threshold=0.5)")
-    for arm in ("mains", "gaminet", "concurvity"):
+    for arm in ("mains", "gaminet", "concurvity", "regularized"):
         if not fold.get(arm):
             continue
         s = concurvity_summary(fold, arm)
@@ -96,7 +96,7 @@ def main() -> None:
     _section("Shape plots")
     plot_dir = FOLD_DIR / RUN_MODE / "plots"
     plot_dir.mkdir(parents=True, exist_ok=True)
-    for arm in ("mains", "gaminet", "concurvity"):
+    for arm in ("mains", "gaminet", "concurvity", "regularized"):
         if fold.get(arm):
             fig = shape_plots(fold, arm, feature_meta)
             out = plot_dir / f"shape_{arm}.png"

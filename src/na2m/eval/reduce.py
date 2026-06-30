@@ -25,7 +25,7 @@ from na2m.utils.concurvity import concurvity_score
 #   y_test:  (N_test,) ndarray
 FoldMeasures = dict[str, list[dict]]
 
-ARM_NAMES = ("mains", "gaminet", "concurvity")
+ARM_NAMES = ("mains", "gaminet", "concurvity", "regularized")
 
 
 def load_fold(
