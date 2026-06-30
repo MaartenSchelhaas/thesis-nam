@@ -4,7 +4,7 @@ run_na2m_eval.py — k-fold × n_runs evaluation loop for all three NA2M arms.
 Call stack (each level owns one responsibility):
     evaluate_na2m  → outer k-fold loop, seed derivation
       └ run_fold   → tune + store configs once per fold, loop over runs
-          └ run_arms → train mains once, branch arms B/C off the same checkpoint
+          └ run_arms → train mains once, branch arms B/C/D off the same checkpoint
 
 run_mode controls the inner train/val split strategy:
     "fixed"     → same split every run within a fold (used for stability evaluation)
@@ -24,6 +24,8 @@ Output layout:
                 mains/run_i/      model.pt, measures.pt, done
                 gaminet/run_i/    measures.pt, done
                 concurvity/run_i/ measures.pt, done
+
+run with: python -m scripts.na2m.run_na2m_eval                
 """
 
 from pathlib import Path
@@ -40,6 +42,7 @@ from scripts.na2m.model_runner import (
 )
 from scripts.na2m.tune_main_na2m import tune_fold
 from scripts.na2m.tune_clarity import tune_clarity_fold
+from scripts.na2m.tune_concurvity_reg import concurvity_reg_fold
 
 
 # --------------------------------------------------------------------------- #
@@ -193,11 +196,20 @@ def run_arms(
             run_seed, mains_dir,
         )
 
-    # --- Arms B and C: branch from the persisted mains checkpoint ---
+    # --- Arms B, C, D: branch from the persisted mains checkpoint ---
     mains_model_path = mains_dir / "model.pt"
 
-    for arm, (with_interactions, with_concurvity_filter) in _ARM_FLAGS.items():
+    for arm, (with_interactions, with_concurvity_filter, _) in _ARM_FLAGS.items():
         if not with_interactions:
+            continue
+
+        arm_config_yaml = tune_dir / f"{arm}_tuned_config.yaml"
+        if not arm_config_yaml.exists():
+            print(
+                f"[run_arms] Skipping arm '{arm}': {arm_config_yaml.name} not found. "
+                f"For 'regularized': inspect the lambda_2 sweep plot and run "
+                f"confirm_regularized_arm.py with fold_dir={tune_dir}"
+            )
             continue
 
         arm_dir = run_dir / arm / f"run_{run_i}"
@@ -205,7 +217,7 @@ def run_arms(
             continue
 
         arm_dir.mkdir(parents=True, exist_ok=True)
-        arm_config = load_na2m_config(str(tune_dir / f"{arm}_tuned_config.yaml"))
+        arm_config = load_na2m_config(str(arm_config_yaml))
         run_arm(
             arm_config, mains_model_path, feature_meta,
             X[train_idx], y[train_idx],
@@ -275,30 +287,57 @@ def run_fold(
     if not mains_config_path.exists():
         mains_space = {k: v for k, v in search_space.items() if k != "marginal_clarity"}
         tune_fold(
-            fixed_params, mains_space, feature_meta,
-            X[tune_idx], y[tune_idx],
-            X[tune_val_idx], y[tune_val_idx],
-            mains_config_path,
+            fixed_params=fixed_params,
+            search_space=mains_space,
+            feature_meta=feature_meta,
+            X_train=X[tune_idx],
+            y_train=y[tune_idx],
+            X_val=X[tune_val_idx],
+            y_val=y[tune_val_idx],
+            output_path=mains_config_path,
             study_name=f"fold_{fold_idx}_main_search",
         )
 
     # --- Stage 2: per-arm clarity tuning (each arm guarded independently) ---
-    for arm, (with_interactions, with_concurvity_filter) in _ARM_FLAGS.items():
-        if not with_interactions:
+    # Arms with with_concurvity_reg=True (arm D) skip Optuna clarity tuning —
+    # their lambda_2 is found via grid sweep in tune_concurvity_reg.py instead.
+    for arm, (with_interactions, with_concurvity_filter, with_concurvity_reg) in _ARM_FLAGS.items():
+        if not with_interactions or with_concurvity_reg:
             continue
         arm_config_path = tune_dir / f"{arm}_tuned_config.yaml"
         if arm_config_path.exists():
             continue
         tune_clarity_fold(
-            mains_config_path,
-            fixed_params["clarity_n_trials"],
-            search_space["marginal_clarity"],
-            feature_meta,
-            X[tune_idx], y[tune_idx],
-            X[tune_val_idx], y[tune_val_idx],
-            arm_config_path,
+            mains_config_path=mains_config_path,
+            n_trials=fixed_params["clarity_n_trials"],
+            search_spec=search_space["marginal_clarity"],
+            feature_meta=feature_meta,
+            X_train=X[tune_idx],
+            y_train=y[tune_idx],
+            X_val=X[tune_val_idx],
+            y_val=y[tune_val_idx],
+            output_path=arm_config_path,
             with_concurvity_filter=with_concurvity_filter,
             study_name=f"fold_{fold_idx}_{arm}_clarity_search",
+        )
+
+    # --- Arm D lambda_2 grid sweep (writes CSV + plot; does NOT write final config) ---
+    sweep_csv = tune_dir / "regularized_lambda2_sweep.csv"
+    lambda2_grid = fixed_params.get("lambda2_grid", [])
+    n_sweep_seeds = fixed_params.get("n_sweep_seeds", 1)
+    gaminet_config_path = tune_dir / "gaminet_tuned_config.yaml"
+    if lambda2_grid and gaminet_config_path.exists() and not sweep_csv.exists():
+        concurvity_reg_fold(
+            mains_config_path=mains_config_path,
+            gaminet_config_path=gaminet_config_path,
+            lambda2_grid=lambda2_grid,
+            n_sweep_seeds=n_sweep_seeds,
+            feature_meta=feature_meta,
+            X_tune=X[tune_idx],
+            y_tune=y[tune_idx],
+            X_tune_val=X[tune_val_idx],
+            y_tune_val=y[tune_val_idx],
+            out_dir=tune_dir,
         )
 
     mains_config = load_na2m_config(str(mains_config_path))
@@ -382,7 +421,7 @@ def main() -> None:
     RUN_MODE  = "fixed"        # "fixed" | "subsample"
     N_RUNS    = 20
     N_FOLDS   = 5
-    BASE_DIR  = Path("runs/compas")
+    BASE_DIR  = Path("runs/compas_na2m")
     FRESH     = False          # True → delete BASE_DIR/<run_mode> first
     # -------------------------------------------------------------------- #
 

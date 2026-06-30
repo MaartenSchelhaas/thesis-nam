@@ -341,7 +341,7 @@ class NA2M(nn.Module):
             self.train()
 
     # ------------------------------------------------------------------
-    # Per-term evaluation
+    # Per-subnet evaluation
     # ------------------------------------------------------------------
     def centered_subnet_output(self, subnet_id: tuple, x_col: torch.Tensor) -> torch.Tensor:
         """Run one subnet on a column of input values and return its centered output.
@@ -494,3 +494,45 @@ class NA2M(nn.Module):
             penalty = penalty + (f_j * f_jk).mean().abs() + (f_k * f_jk).mean().abs()
 
         return penalty
+
+    # ------------------------------------------------------------------
+    # Siems et al. pairwise concurvity regularizer
+    # ------------------------------------------------------------------
+
+    def concurvity_reg_loss(self, x: torch.Tensor) -> torch.Tensor:
+        """Pairwise concurvity regularizer R_perp from Siems et al. (NeurIPS 2023).
+
+        Computes the mean absolute pairwise Pearson correlation over all C(p, 2) pairs
+        of additive component outputs (K mains + active interactions). Based on the
+        concurvity definition by Ramsay, Burnett & Krewski (2003). Implementation
+        follows the pairwise() + correlation() functions from the Siems et al. 2023 code.
+
+        If the standard deviation of a component is zero, its correlation entries are
+        set to zero (via torch.where). A small epsilon (1e-12) is added to the
+        denominator to prevent division by zero.
+
+        Returns 0 when fewer than 2 components are active.
+
+        Args:
+            x: Input batch, shape (batch_size, num_features).
+
+        Returns:
+            Scalar tensor, average absolute pairwise correlation penalty. 
+        """
+        outputs = self.main_outputs(x) + self.inter_outputs(x)
+
+        p = len(outputs)
+        if p < 2:
+            return torch.zeros(1, device=self._bias.device)
+        
+        #Compute all correlations as a matrix
+        output_matrix = torch.cat(outputs, dim=1).T  # (p, batch)
+        std = torch.std(output_matrix, dim=1)
+        std_outer = std * std.reshape(-1, 1)
+        corr = torch.cov(output_matrix) / (std_outer + 1e-12)
+        corr = torch.where(std_outer == 0.0, torch.zeros_like(corr), corr)
+
+        # Reference pairwise() upper-triangle extraction
+        idx = torch.triu_indices(p, p, offset=1)
+        return torch.mean(torch.abs(corr[idx[0], idx[1]]))
+

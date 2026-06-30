@@ -23,12 +23,13 @@ from na2m.eval.extract import extract_measures
 from na2m.utils.config import load_na2m_config
 from na2m.utils.device import get_device
 
-# arm name -> (with_interactions, with_concurvity_filter). Single source of truth
-# for which arms exist and the order they run in.
-_ARM_FLAGS: dict[str, tuple[bool, bool]] = {
-    "mains":      (False, False),  # arm A — mains only
-    "gaminet":    (True,  False),  # arm B — GAMI-Net, no gate
-    "concurvity": (True,  True),   # arm C — GAMI-Net + concurvity gate
+# arm name -> (with_interactions, with_concurvity_filter, with_concurvity_reg).
+# Single source of truth for which arms exist and the order they run in.
+_ARM_FLAGS: dict[str, tuple[bool, bool, bool]] = {
+    "mains":       (False, False, False),  # arm A — mains only
+    "gaminet":     (True,  False, False),  # arm B — GAMI-Net, no gate
+    "concurvity":  (True,  True,  False),  # arm C — GAMI-Net + concurvity gate
+    "regularized": (True,  False, True),   # arm D — GAMI-Net + concurvity regularizer
 }
 
 
@@ -220,6 +221,7 @@ def run_arm(
 
     Args:
         config: NA2MConfig with model + training hyperparameters.
+            config.concurvity_regularization drives the R_perp penalty for arm D.
         mains_model_path: Path to the saved mains state_dict (mains_dir/"model.pt").
         feature_meta: FeatureMeta list from preprocess().
         X_train, y_train: Training split (same split used for the mains).
@@ -227,8 +229,8 @@ def run_arm(
         X_test, y_test: Test slice — for measure extraction.
         seed: Seed for the interaction stages (same across arms → B and C paired).
         out_dir: This arm's output dir; receives measures.pt, done.
-        with_interactions: False → arm A; True → arm B/C.
-        with_concurvity_filter: False → arm B (NoGate); True → arm C (gate on).
+        with_interactions: False → arm A; True → arm B/C/D.
+        with_concurvity_filter: False → arm B/D (NoGate); True → arm C (gate on).
     """
     set_seed(seed)
     mains_model = load_main_effects(config, feature_meta, X_train.shape[1], mains_model_path)
@@ -270,7 +272,7 @@ if __name__ == "__main__":
     run_main_effects(config, feature_meta, X_train, y_train, X_val, y_val,
                      X_test, y_test, seed, mains_dir)
 
-    for arm, (with_interactions, with_concurvity_filter) in _ARM_FLAGS.items():
+    for arm, (with_interactions, with_concurvity_filter, _) in _ARM_FLAGS.items():
         if not with_interactions:
             continue  # arm A already handled by run_main_effects
         run_arm(config, mains_dir / "model.pt", feature_meta, X_train, y_train, X_val, y_val,

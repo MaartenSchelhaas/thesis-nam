@@ -7,21 +7,27 @@ inter_hidden: []
 
 decay_rate: 0.995
 batch_size: 1024
-num_epochs: 100
-patience: 50
+num_epochs: 500
+block_train_epochs: 500
+finetune_epochs: 500
+patience: 25
 val_check_interval: 10
 task: classification
 val_frac: 0.10
 test_frac: 0.20
 seed: 42
-n_trials: 20
+n_trials: 50
 
 top_m: 10
 eta_prune: 0.01
 block_train_epochs: 100
 finetune_epochs: 100
 concurvity_threshold: 0.5
-clarity_n_trials: 15
+clarity_n_trials: 30
+
+# --- Arm D lambda_2 grid sweep (tune_concurvity_reg.py) ---
+lambda2_grid: [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0]
+n_sweep_seeds: 3
 
 # --- Main-effects search space (tune_na2m.py) ---
 # clarity_regularization is intentionally absent — it is tuned separately by
