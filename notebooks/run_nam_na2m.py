@@ -33,7 +33,7 @@ from pathlib import Path
 from sklearn.model_selection import KFold, train_test_split
 from torch.utils.data import DataLoader
 
-from na2m.data.data_utils import load_compas, preprocess
+from na2m.data.compas import CompasDataset
 from na2m.models.na2m import NA2M
 from na2m.training.fit_na2m import fit_na2m
 from na2m.utils.config import load_na2m_config, load_na2m_search_config
@@ -253,8 +253,9 @@ if __name__ == "__main__":
         print(f"Deleted {BASE_DIR} for fresh run.")
 
     fixed_params, _ = load_na2m_search_config(SEARCH_CONFIG_PATH)
-    df = load_compas(fixed_params["dataset_path"])
-    X, y, feature_meta = preprocess(df)
+    dataset = CompasDataset()
+    df = dataset.load(fixed_params.get("dataset_path"))
+    X, y, feature_meta = dataset.preprocess(df)
 
     evaluate_na2m_kfold(
         search_config_path=SEARCH_CONFIG_PATH,

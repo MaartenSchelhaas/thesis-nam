@@ -22,7 +22,7 @@ from pathlib import Path
 import torch
 import yaml
 
-from na2m.data.data_utils import load_compas, preprocess
+from na2m.data.compas import CompasDataset
 from na2m.utils.config import load_na2m_search_config
 from scripts.na2m.run_na2m_eval import evaluate_na2m
 
@@ -69,8 +69,9 @@ with open(patched_config_path, "w") as f:
 # Data                                                                          #
 # --------------------------------------------------------------------------- #
 
-df = load_compas(fixed_params["dataset_path"])
-X, y, feature_meta = preprocess(df)
+DATASET = CompasDataset()
+df = DATASET.load(fixed_params.get("dataset_path"))
+X, y, feature_meta = DATASET.preprocess(df)
 print(f"Dataset: {X.shape[0]} samples, {X.shape[1]} features")
 
 

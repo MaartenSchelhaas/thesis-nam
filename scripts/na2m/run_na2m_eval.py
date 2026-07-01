@@ -33,7 +33,8 @@ from pathlib import Path
 import numpy as np
 from sklearn.model_selection import KFold, train_test_split
 
-from na2m.data.data_utils import load_compas, preprocess
+from na2m.data.compas import CompasDataset
+from na2m.data.california_housing import CaliforniaHousingDataset
 from na2m.utils.config import load_na2m_config, load_na2m_search_config
 from scripts.na2m.model_runner import (
     run_main_effects,
@@ -417,11 +418,17 @@ def evaluate_na2m(
 
 def main() -> None:
     # ------------------------------ PARAMS ------------------------------ #
-    SEARCH_CONFIG_PATH = r"C:\Users\maart\OneDrive\Documenten\Universiteit\Scriptie\python_repo\thesis-nam\configs\compas_na2m_search.yaml"
+    # --- Dataset (swap these two lines to switch) ---
+    # SEARCH_CONFIG_PATH = r"C:\Users\maart\OneDrive\Documenten\Universiteit\Scriptie\python_repo\thesis-nam\configs\compas_na2m_search.yaml"
+    # DATASET = CompasDataset();  DATASET_NAME = "compas"
+    SEARCH_CONFIG_PATH = r"C:\Users\maart\OneDrive\Documenten\Universiteit\Scriptie\python_repo\thesis-nam\configs\california_housing_na2m_search.yaml"
+    DATASET      = CaliforniaHousingDataset()
+    DATASET_NAME = "california_housing"
+    # ------------------------------------------------
     RUN_MODE  = "fixed"        # "fixed" | "subsample"
     N_RUNS    = 20
     N_FOLDS   = 5
-    BASE_DIR  = Path("runs/compas_na2m")
+    BASE_DIR  = Path(f"runs/{DATASET_NAME}_na2m")
     FRESH     = False          # True → delete BASE_DIR/<run_mode> first
     # -------------------------------------------------------------------- #
 
@@ -430,8 +437,8 @@ def main() -> None:
         shutil.rmtree(BASE_DIR / RUN_MODE)
 
     fixed_params, _ = load_na2m_search_config(SEARCH_CONFIG_PATH)
-    df = load_compas(fixed_params["dataset_path"])
-    X, y, feature_meta = preprocess(df)
+    df = DATASET.load(fixed_params.get("dataset_path"))
+    X, y, feature_meta = DATASET.preprocess(df)
 
     evaluate_na2m(
         SEARCH_CONFIG_PATH, X, y, feature_meta, BASE_DIR,

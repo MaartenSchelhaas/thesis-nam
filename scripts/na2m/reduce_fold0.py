@@ -7,7 +7,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from na2m.data.data_utils import load_compas, preprocess
+from na2m.data.compas import CompasDataset
 from na2m.utils.config import load_na2m_config
 from na2m.eval.reduce import (
     accuracy_summary,
@@ -19,6 +19,7 @@ from na2m.eval.reduce import (
     shape_plots,
 )
 
+DATASET      = CompasDataset()
 DATASET_PATH = r"datasets/raw/compas-scores-two-years.csv"
 FOLD_DIR     = Path("runs/compas_na2m/fold_0")
 RUN_MODE     = "fixed"
@@ -32,8 +33,8 @@ def _section(title: str) -> None:
 
 
 def main() -> None:
-    df = load_compas(DATASET_PATH)
-    _, _, feature_meta = preprocess(df)
+    df = DATASET.load(DATASET_PATH)
+    _, _, feature_meta = DATASET.preprocess(df)
 
     config = load_na2m_config(str(FOLD_DIR / "mains_tuned_config.yaml"))
     task = config.task

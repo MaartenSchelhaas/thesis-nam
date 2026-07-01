@@ -35,7 +35,7 @@ from torch.utils.data import DataLoader
 
 from .feature_nn import FeatureNN
 from .categnet import CategNet
-from na2m.data.data_utils import FeatureMeta
+from na2m.data.shared import FeatureMeta
 
 
 class NA2M(nn.Module):

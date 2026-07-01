@@ -16,7 +16,8 @@ import torch
 from torch.utils.data import DataLoader
 
 from na2m.models.na2m import NA2M
-from na2m.data.data_utils import load_compas, preprocess, split, make_grid
+from na2m.data.shared import make_grid, split
+from na2m.data.compas import CompasDataset
 from na2m.data.dataset import NAMDataset
 from na2m.training.fit_na2m import fit_na2m
 from na2m.eval.extract import extract_measures
@@ -259,10 +260,12 @@ if __name__ == "__main__":
     config = load_na2m_config(CONFIG_PATH)
     seed = config.seed
 
-    df = load_compas(config.dataset_path)
-    X, y, feature_meta = preprocess(df)
+    dataset = CompasDataset()
+    df = dataset.load(config.dataset_path)
+    X, y, feature_meta = dataset.preprocess(df)
     X_train, X_val, X_test, y_train, y_val, y_test = split(
-        X, y, config.val_frac, config.test_frac, config.seed
+        X, y, config.val_frac, config.test_frac, config.seed,
+        stratify=(config.task == "classification"),
     )
 
     out_root = Path("runs/model_runner_smoke")

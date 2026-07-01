@@ -1,0 +1,57 @@
+# --- Fixed (not tuned) ---
+num_units: 64
+hidden_sizes: [64, 32]
+inter_units: 32
+inter_hidden: []
+
+decay_rate: 0.995
+batch_size: 1024
+num_epochs: 500
+block_train_epochs: 500
+finetune_epochs: 500
+patience: 25
+val_check_interval: 10
+task: regression
+val_frac: 0.10
+test_frac: 0.20
+seed: 42
+n_trials: 50
+
+top_m: 10
+eta_prune: 0.01
+block_train_epochs: 100
+finetune_epochs: 100
+concurvity_threshold: 0.5
+clarity_n_trials: 30
+
+# --- Arm D lambda_2 grid sweep (tune_concurvity_reg.py) ---
+lambda2_grid: [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0]
+n_sweep_seeds: 3
+
+# --- Main-effects search space (tune_na2m.py) ---
+search_space:
+  activation:
+    type: categorical
+    choices: [relu]
+  lr:
+    type: float_log
+    low: 0.001
+    high: 0.1
+  output_regularization:
+    type: float_log
+    low: 0.001
+    high: 0.1
+  l2_regularization:
+    type: float_log
+    low: 0.000001
+    high: 0.0001
+  dropout:
+    type: categorical
+    choices: [0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  feature_dropout:
+    type: categorical
+    choices: [0, 0.05, 0.1, 0.2]
+  marginal_clarity:
+    type: float_log
+    low: 0.0001
+    high: 1.0
