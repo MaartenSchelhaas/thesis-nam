@@ -146,8 +146,8 @@ def save_best_config(
     clarity_regularization is kept at its fixed value (0.0) — it will be
     overwritten by tune_clarity.tune_clarity_fold in a second pass.
     """
-    _DROP = {"dataset_path", "n_trials", "clarity_n_trials"}
-    best_params = {k: v for k, v in fixed_params.items() if k not in _DROP}
+    _na2m_fields = set(NA2MConfig.__dataclass_fields__)
+    best_params = {k: v for k, v in fixed_params.items() if k in _na2m_fields}
     best_params.update(study.best_trial.params)
     best_params["clarity_regularization"] = 0.0  # placeholder; tune_clarity_fold overwrites
 
