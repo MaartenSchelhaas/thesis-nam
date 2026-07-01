@@ -20,8 +20,6 @@ n_trials: 50
 
 top_m: 10
 eta_prune: 0.01
-block_train_epochs: 100
-finetune_epochs: 100
 concurvity_threshold: 0.5
 clarity_n_trials: 30
 
@@ -58,12 +56,3 @@ search_space:
     type: float_log
     low: 0.0001
     high: 1.0
-
-
-# --- Clarity search space (tune_clarity.py) ---
-# Searched separately after main-effects tuning; written back to the tuned YAML.
-
-#clarity_search_space:
-#  type: float_log
-#  low: 0.0001
-#  high: 1.0
