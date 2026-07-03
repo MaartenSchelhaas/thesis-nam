@@ -1,6 +1,9 @@
 """
 model_runner.py — train, persist, and extract measures for each NA2M arm.
 
+Eval scrtips are the orchestrators: They create seeds, and give the data,
+this scripts then takes these and creates and runs the models.
+
 The mains are trained once per run and saved to model.pt. Arms B and C deepcopy
 from that checkpoint so they all start from the same base. After each arm finishes
 training, its measures are extracted and saved to measures.pt — the model itself
@@ -16,8 +19,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from na2m.models.na2m import NA2M
-from na2m.data.shared import make_grid, split
-from na2m.data.compas import CompasDataset
+from na2m.data.shared import make_grid
 from na2m.data.dataset import NAMDataset
 from na2m.training.fit_na2m import fit_na2m
 from na2m.eval.extract import extract_measures
@@ -252,33 +254,3 @@ def run_arm(
     model.eval()
     X_pool = np.concatenate([X_train, X_val])
     _extract_and_save(model, X_pool, X_test, y_test, feature_meta, config, out_dir)
-
-
-if __name__ == "__main__":
-    # Manual smoke test (requires extract_measures to be implemented).
-    CONFIG_PATH = r"C:\Users\maart\OneDrive\Documenten\Universiteit\Scriptie\python_repo\thesis-nam\configs\compas-scores-two-years_na2m_tuned.yaml"
-    config = load_na2m_config(CONFIG_PATH)
-    seed = config.seed
-
-    dataset = CompasDataset()
-    df = dataset.load(config.dataset_path)
-    X, y, feature_meta = dataset.preprocess(df)
-    X_train, X_val, X_test, y_train, y_val, y_test = split(
-        X, y, config.val_frac, config.test_frac, config.seed,
-        stratify=(config.task == "classification"),
-    )
-
-    out_root = Path("runs/model_runner_smoke")
-    mains_dir = out_root / "mains"
-
-    # Train the mains once (saves model.pt + extracts arm-A measures), then branch.
-    run_main_effects(config, feature_meta, X_train, y_train, X_val, y_val,
-                     X_test, y_test, seed, mains_dir)
-
-    for arm, (with_interactions, with_concurvity_filter, _) in _ARM_FLAGS.items():
-        if not with_interactions:
-            continue  # arm A already handled by run_main_effects
-        run_arm(config, mains_dir / "model.pt", feature_meta, X_train, y_train, X_val, y_val,
-                X_test, y_test, seed, out_root / arm,
-                with_interactions=with_interactions,
-                with_concurvity_filter=with_concurvity_filter)

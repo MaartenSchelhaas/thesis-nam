@@ -42,7 +42,7 @@ thesis-nam/
 │   └── reduce/                 # aggregate stored measures into headline numbers/plots
 │       ├── reduce_fold.py             # print all metrics for a single fold (dataset + fold index selected at top of main())
 │       ├── reduce_all_folds.py        # aggregate metrics across all folds
-│       └── reduce_mains_subsample.py  # ensemble accuracy + 95% CI for the Agarwal mains-only reproduction
+│       └── reduce_mains_subsample.py  # ensemble accuracy, for the Agarwal mains-only reproduction
 ├── runs/                     # training outputs: checkpoints, metrics (Thesis results included)
 ├── notebooks/                # Used during development, could contain stale code. 
 ├── tests/                    # pytest tests, empty
@@ -50,6 +50,8 @@ thesis-nam/
 ```
 
 Primary dataset: COMPAS recidivism scores (place CSV in `datasets/raw/`).
+California Housing dataset was created, but due to time constraints results
+are not included. 
 
 ## NA2M extension
 
@@ -160,14 +162,14 @@ runs/compas_na2m/
 
 Tuning is done once per fold regardless of how many run modes you evaluate.
 Switching from `fixed` to `subsample` reuses the tuned configs and only
-re-runs the model training. Resume is fully granular: the `done` file is
+re-runs the model training. Resume is fully interruptible: the `done` file is
 written last, so a crashed run continues exactly where it left off on rerun.
 
 ## Usage
 
 Main thesis results (all four arms, k-fold × n_runs):
 
-Change the config config file for the given datset if you changes in the search space, amound of fold or runs. 
+Change the config config file for the given datset if you want changes in the search space, amound of fold or runs. 
 Then:
 
 ```bash

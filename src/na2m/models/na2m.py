@@ -7,26 +7,15 @@ pairwise interaction subnets (FeatureNN with in_features=2, activation='relu'):
 
     y = b + Σ_j f_j(x_j) + Σ_(j,k) f_jk(x_j, x_k)
 
-ONE backbone serves all three experiment arms:
-    Arm A = NA2M with interactions disabled (no pairs added). The
-            interactions-off forward path MUST be identical to a mains-only NAM
-            forward (same dropout/sum/bias behavior). Do NOT use the old one-hot
-            NAM as arm A.
-    Arm B / C = mains + interactions. They share an IDENTICAL pipeline; the only
-            difference is that arm C fires the concurvity gate during the Stage-2
-            prune sweep (concurvity_filter=True). No per-removal re-fine-tune
-            exists for either arm — both fine-tune exactly once.
+One backbone serves all four experiment arms (mains-only, GAMI-Net, +
+concurvity gate, + concurvity regularizer, see README.md for the full
+table). Interaction subnets are built EXACTLY when selected (no
+pre-allocation, no masking); after any structural change (add/remove
+interaction) the optimizer MUST be rebuilt by the caller.
 
-Dynamic model: interaction subnets are built EXACTLY when selected (no
-pre-allocation, no masking). After any structural change (add/remove
-interaction), the optimizer MUST be rebuilt by the caller.
-
-Terms are keyed by term_id, never positionally:
-    main term  → ("main", j)
-    inter term → ("inter", j, k)
-
-Do NOT modify nam.py / feature_nn.py / activation — those are the frozen
-reproduction baseline. This is a new, parallel model.
+Subnets are keyed by term_id, never positionally:
+    main subnets  → ("main", j)
+    interaction subnets → ("inter", j, k)
 """
 
 import torch
@@ -532,7 +521,7 @@ class NA2M(nn.Module):
         corr = torch.cov(output_matrix) / (std_outer + 1e-12)
         corr = torch.where(std_outer == 0.0, torch.zeros_like(corr), corr)
 
-        # Reference pairwise() upper-triangle extraction
+        #Uses reference pairwise() upper-triangle extraction
         idx = torch.triu_indices(p, p, offset=1)
         return torch.mean(torch.abs(corr[idx[0], idx[1]]))
 

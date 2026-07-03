@@ -29,10 +29,6 @@ class CategNet(nn.Module):
     layers cannot learn cross-level interactions.
     """
 
-    # TODO: add moving_mean tracking (needed for marginal clarity penalty, stage 3)
-    # See GAMI-Net's NAMNet.call() (Yang et al., 2021) — same pattern as CategNet, subnet_mean
-    # tracked during training and used in NA2M.clarity_loss().
-
     def __init__(self, n_levels: int):
         """
         Args:

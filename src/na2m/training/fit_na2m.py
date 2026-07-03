@@ -7,9 +7,11 @@ Stage 2: FAST screen → block-train top-M interactions (mains frozen) → singl
          a concurvity gate.
 Stage 3: unfreeze all, fine-tune once with the clarity penalty, re-center.
 
-Arms differ only by two flags: with_interactions and with_concurvity_filter.
-Arm A skips stages 2-3 entirely. Arms B and C run the same pipeline; C fires
-the concurvity gate inside the sweep. Both fine-tune exactly once.
+Arms differ only by two flags plus one scalar: with_interactions,
+with_concurvity_filter, and config.concurvity_regularization. Arm A skips
+stages 2-3 entirely. Arms B, C, and D run the same pipeline; C fires the
+concurvity gate inside the sweep, D instead adds the R_perp penalty to the
+loss in stages 2-3. All three fine-tune exactly once.
 """
 from na2m.models.na2m import NA2M
 from na2m.training.trainer import Trainer
@@ -395,18 +397,3 @@ def stage3_finetune(
 
     model.center_main_effects(pool_loader)
     model.center_interactions(pool_loader, fold_bias=True)
-
-
-# ----------------------------------------------------------------------------
-# REMOVED: stage4_concurvity (iterative remove-and-re-fine-tune).
-#
-# The old methodology scored interactions on the FINE-TUNED model, removed the
-# most concurve pair, and RE-FINE-TUNED, looping to a fixed point (capped by
-# max_concurvity_iters). That path is deleted. The ONLY place re-fine-tuning was
-# assumed is gone: concurvity is now a SELECTION-TIME gate inside stage2_select's
-# single sweep, and the model fine-tunes exactly once in stage3_finetune.
-#
-# If you find any remaining caller that loops fine-tuning or references
-# max_concurvity_iters / a per-removal Trainer rebuild, it is leftover from the
-# old design and should be removed.
-# ----------------------------------------------------------------------------

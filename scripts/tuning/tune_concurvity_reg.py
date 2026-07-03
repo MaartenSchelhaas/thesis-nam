@@ -1,33 +1,16 @@
 """
 tune_concurvity_reg.py — lambda_2 grid sweep for NA2M arm D (concurvity regularizer).
 
-Run AFTER tune_clarity.py has written gaminet_tuned_config.yaml. Trains the
-main effects once, then for each (lambda_2, seed) pair runs Stage 2 (NoGate,
-identical to arm B) and Stage 3 with lambda_1 fixed from the gaminet config and
-lambda_2 from the grid. Records val_loss and R_perp at each grid point.
+Run AFTER tune_main_na2m.py and tune_clarity.py have written
+mains_tuned_config.yaml and gaminet_tuned_config.yaml. Trains the mains ONCE,
+then for each (lambda_2, seed) pair deepcopies that snapshot and runs Stage 2
+(NoGate) + Stage 3 with lambda_1 fixed from the gaminet config and lambda_2
+from the grid, recording val_loss and R_perp.
 
-Does NOT write regularized_tuned_config.yaml — a human must inspect the
-tradeoff plot and run confirm_regularized_arm.py to commit a value.
-
-The elbow rule uses the same eta_prune tolerance as Stage 2's η-cut. Losses
-are passed in descending lambda_2 order so _eta_cut returns the largest lambda_2
-still within eta of the minimum loss (the same "fewest constraint" logic as
-Stage 2's "fewest removed pairs").
-
-KEY DESIGN — identical to tune_clarity.py's train-once strategy:
-    1. Train the main bank ONCE from mains_tuned_config.yaml (stage1_main).
-    2. Per (lambda_2, seed): deepcopy the snapshot, run Stage 2 (NoGate) and
-       Stage 3 with the given lambda_2, record val_loss + R_perp.
-Stage 1 is not re-run per grid point — it is identical across all lambda_2
-values and would only inject noise if repeated.
-
-The fold's tuning split (X_tune / X_tune_val) is passed in by run_fold, the
-same arrays tune_clarity_fold already uses for this fold. This guarantees
-lambda_2 is evaluated on the same split as lambda_1.
-
-CSV format: one row per (lambda_2, seed) — the raw per-run results.
-Aggregation (mean ± std across seeds) is computed on the fly for the plot
-and elbow rule; it is not stored separately.
+Does NOT tune lambda_1, does NOT re-tune the mains, and does NOT write
+regularized_tuned_config.yaml — it only writes the sweep CSV + tradeoff plot.
+A human must inspect the plot and run confirm_regularized_arm.py to commit a
+lambda_2 value.
 """
 
 import copy

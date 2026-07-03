@@ -8,8 +8,7 @@ is tuned separately by tune_clarity.py once the main-effects config is fixed.
 Pruning works: trial is threaded into the Stage-1 Trainer so Optuna's
 MedianPruner can cut bad trials early on intermediate validation metrics.
 
-tune_fold() is called directly by run_na2m_eval.py's fold loop — this module
-has no standalone entry point.
+tune_fold() is called directly by run_na2m_eval.py's fold loop.
 """
 
 import numpy as np

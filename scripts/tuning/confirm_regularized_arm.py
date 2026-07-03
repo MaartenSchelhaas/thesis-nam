@@ -1,28 +1,15 @@
 """
 confirm_regularized_arm.py — write regularized_tuned_config.yaml for arm D.
 
-Run AFTER concurvity_reg_fold has written the sweep CSV and tradeoff plot for
-each fold. Inspect each fold's plot, fill in lambda2_per_fold below, and run.
+Run AFTER tune_concurvity_reg.py has written the sweep CSV + plot for each
+fold. Inspect each fold's plot, set lambda2_per_fold in main(), then run:
+    python -m scripts.tuning.confirm_regularized_arm
 
-- None         → not yet confirmed (skipped, no file written)
-- missing CSV  → sweep not yet run for that fold (warning printed)
-
-What this writes per confirmed fold:
-    regularized_tuned_config.yaml
-        All fields from mains_tuned_config.yaml, plus:
-            clarity_regularization      — copied from gaminet_tuned_config.yaml (lambda_1)
-            concurvity_regularization   — the confirmed lambda_2 value
-
-    regularized_config_meta.yaml
-        Source-tracking only (not loaded by NA2MConfig):
-            confirmed_lambda2    — the value that was written
-            lambda1_from_gaminet — the clarity_regularization value copied from gaminet
-            reason               — optional human note
-            confirmed_at         — ISO timestamp
-
-Usage:
-    Edit the variables at the top of main() then run:
-        python -m scripts.tuning.confirm_regularized_arm
+Per confirmed fold, writes regularized_tuned_config.yaml (mains config +
+clarity_regularization copied from gaminet_tuned_config.yaml + the confirmed
+concurvity_regularization) and regularized_config_meta.yaml (for tracking only:
+confirmed value, reason, timestamp). Folds left as None in lambda2_per_fold are skipped; 
+folds missing a sweep CSV print a warning and are skipped.
 """
 
 from datetime import datetime, timezone

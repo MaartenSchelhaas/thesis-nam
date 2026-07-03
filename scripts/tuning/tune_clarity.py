@@ -1,45 +1,15 @@
 """
-tune_clarity.py — Optuna search for NA2M clarity_regularization (arm B).
+tune_clarity.py — Optuna search for NA2M clarity_regularization (arms B/C).
 
-Run AFTER tune_main_na2m.py. Loads the Stage-1 tuned main-effects config and searches
-ONLY clarity_regularization, then writes the best value back into the same YAML.
-Arm C later reuses that same config unchanged.
+Run AFTER tune_main_na2m.py. Loads the Stage-1 tuned main-effects config,
+trains the mains ONCE, then each trial deepcopies that snapshot and runs only
+Stage 2 (select) + Stage 3 (fine-tune) with a sampled clarity_regularization —
+avoiding a full mains retrain per trial. Arm C reuses the same main-effects
+config unchanged but re-tunes clarity with the concurvity gate active
+(with_concurvity_filter=True); each arm's best value is written to its own
+tuned config YAML.
 
-KEY DESIGN — train the mains ONCE, then sweep only Stage 2/3
-------------------------------------------------------------
-clarity_regularization has NO effect on Stage 1: the marginal-clarity penalty
-acts on interactions, which don't exist yet during the mains fit (stage1_main
-hardcodes clarity_lambda=0.0). So retraining the mains from scratch on every
-clarity trial would recompute the SAME main effects again and again — pure wasted
-compute, and it would inject mains-init noise into a comparison that is supposed
-to isolate clarity.
-
-Instead:
-    1. Train the main bank ONCE with the fixed Stage-1 hyperparameters
-       (stage1_main) and snapshot the resulting model.
-    2. Each trial starts from a fresh deepcopy of that snapshot and runs ONLY
-       Stage 2 (block-train + select) and Stage 3 (fine-tune) with the trial's
-       clarity_regularization. The trials then differ ONLY by clarity.
-
-Why a fresh deepcopy per trial (not the shared snapshot): Stage 3 fine-tunes ALL
-params, including the mains. Mutating the shared snapshot would leak trial n's
-fine-tuned mains into trial n+1. The deepcopy gives every trial the same clean
-post-Stage-1 starting point.
-
-Why Stage 2 is inside the trial (not done once like Stage 1): the Stage-2 block
-trainer uses clarity_lambda, so different clarity can block-train different
-interaction subnets and therefore SELECT a different pair set. Selection is part
-of what clarity influences, so it must be redone per trial.
-
-No pruning: with Stage 1 lifted out of the trial there are no clarity-dependent
-intermediate Stage-1 metrics to prune on; each trial just runs Stage 2/3 to
-completion.
-
-The real per-(fold, run) evaluation in run_single.py still runs the FULL pipeline
-via fit_na2m — this train-once shortcut is a TUNING optimisation only.
-
-tune_clarity_fold() is called directly by run_na2m_eval.py's fold loop — this
-module has no standalone entry point.
+tune_clarity_fold() is called directly by run_na2m_eval.py's fold loop.
 """
 
 import copy

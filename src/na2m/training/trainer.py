@@ -5,10 +5,8 @@ Handles training a single NA2M instance: forward pass, backpropagation,
 learning rate scheduling, validation, and early stopping. The best model
 state (by validation metric) is retained in memory after training.
 
-This is a full, standalone copy of the NAM Trainer (src/nam/training/trainer.py)
-so src/na2m/ has no dependency on src/nam/. The ONLY behavioural difference is
-the clarity_lambda parameter, which enables the GAMI-Net marginal-clarity penalty
-during interaction block-training (Stage 2) and joint fine-tuning (Stage 3). Set
+clarity_lambda enables the GAMI-Net marginal-clarity penalty during
+interaction block-training (Stage 2) and joint fine-tuning (Stage 3). Set
 clarity_lambda=0.0 for Stage 1 (mains only, no interactions exist yet).
 
 Usage:

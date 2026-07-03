@@ -1,5 +1,8 @@
 """
-run_na2m_eval.py — k-fold × n_runs evaluation loop for all three NA2M arms.
+run_na2m_eval.py — k-fold × n_runs evaluation loop for all four NA2M arms.
+
+Orchestrates folders, seeds and data/datasplits. Hands that of to the tuning
+scripts, and the model_runner.py
 
 Call stack (each level owns one responsibility):
     evaluate_na2m  → outer k-fold loop, seed derivation
@@ -10,20 +13,24 @@ run_mode controls the inner train/val split strategy:
     "fixed"     → same split every run within a fold (used for stability evaluation)
     "subsample" → fresh split per run (Agarwal-style ensemble)
 
-Resume is granular: each done sentinel (written last by model_runner) marks one
+Resume is interruptable: each done sentinel file (written last by model_runner) marks one
 arm/run as complete. Tuned configs are shared across run modes; run outputs are
 mode-specific, so switching run_mode reruns all models without re-tuning.
 
 Output layout:
-    runs/compas/
+    runs/compas_na2m/
         fold_k/
-            mains_tuned_config.yaml      ← shared across run modes
+            mains_tuned_config.yaml        ← shared across run modes
             gaminet_tuned_config.yaml
             concurvity_tuned_config.yaml
+            regularized_lambda2_sweep.csv  ← written by concurvity_reg_fold
+            regularized_lambda2_sweep.png
+            regularized_tuned_config.yaml  ← written by confirm_regularized_arm.py
             <run_mode>/
-                mains/run_i/      model.pt, measures.pt, done
-                gaminet/run_i/    measures.pt, done
-                concurvity/run_i/ measures.pt, done
+                mains/run_i/        model.pt, measures.pt, done
+                gaminet/run_i/      measures.pt, done
+                concurvity/run_i/   measures.pt, done
+                regularized/run_i/  measures.pt, done
 
 run with: python -m scripts.eval.run_na2m_eval
 """
@@ -419,12 +426,12 @@ def evaluate_na2m(
 def main() -> None:
     # ------------------------------ PARAMS ------------------------------ #
     # --- Dataset (swap these two lines to switch) ---
-    # SEARCH_CONFIG_PATH = r"C:\Users\maart\OneDrive\Documenten\Universiteit\Scriptie\python_repo\thesis-nam\configs\compas_na2m_search.yaml"
-    # DATASET = CompasDataset();  
-    # DATASET_NAME = "compas"
-    SEARCH_CONFIG_PATH = r"C:\Users\maart\OneDrive\Documenten\Universiteit\Scriptie\python_repo\thesis-nam\configs\california_housing_na2m_search.yaml"
-    DATASET      = CaliforniaHousingDataset()
-    DATASET_NAME = "california_housing"
+    SEARCH_CONFIG_PATH = r"C:\Users\maart\OneDrive\Documenten\Universiteit\Scriptie\python_repo\thesis-nam\configs\compas_na2m_search.yaml"
+    DATASET = CompasDataset();  
+    DATASET_NAME = "compas"
+    #SEARCH_CONFIG_PATH = r"C:\Users\maart\OneDrive\Documenten\Universiteit\Scriptie\python_repo\thesis-nam\configs\california_housing_na2m_search.yaml"
+    #DATASET      = CaliforniaHousingDataset()
+    #DATASET_NAME = "california_housing"
     # ------------------------------------------------
     RUN_MODE  = "fixed"        # "fixed" | "subsample"
     N_RUNS    = 20

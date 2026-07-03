@@ -1,6 +1,9 @@
 """
 evaluate_na2m_mains.py — K-fold × n_runs subsample evaluation for NA2M main effects (Arm A only).
 
+Orchestrates folders, seeds and data/datasplits. Hands that of to the tuning
+scripts, and the model_runner.py
+
 Trains n_runs subsampled models per fold (each on a fresh random train/val split of the pool)
 and stores measures.pt for each run. Metric computation (ensemble + CI) is handled separately
 by the reducer (src/na2m/eval/reduce.py), following the store-everything → reducer boundary.
