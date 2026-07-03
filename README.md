@@ -16,6 +16,45 @@ To also run the notebooks (or use `pytest`/`ruff`/`mypy`), install the `dev` ext
 pip install -e ".[dev]"
 ```
 
+## Usage
+
+Main thesis results (all four arms, k-fold × n_runs):
+
+Change the config config file for the given datset if you want changes in the search space, amound of fold or runs. 
+Then:
+
+```bash
+python -m scripts.eval.run_na2m_eval
+```
+
+Arm D needs a manual step in between: `run_na2m_eval` runs the `lambda_2` grid
+sweep and prints where the plot + CSV landed, but will not train arm D until a
+value is confirmed. Inspect the sweep plot, then run:
+
+```bash
+python -m scripts.tuning.confirm_regularized_arm
+```
+
+(edit the variables at the top of `main()` to point at the fold and chosen
+`lambda_2`), then rerun `python -m scripts.eval.run_na2m_eval` to train and
+evaluate arm D with the confirmed config.
+
+Agarwal-style mains-only reproduction (subsampled train/val split per run):
+
+```bash
+python -m scripts.eval.evaluate_na2m_mains
+```
+
+If `run_na2m_eval` has already tuned a fold (`mains_tuned_config.yaml` exists),
+tuning is skipped and this just runs in subsample mode, storing measures.
+Otherwise it does its own tuning, mirroring `run_na2m_eval` closely.
+
+Once that's done, aggregate the reproduction result:
+
+```bash
+python -m scripts.reduce.reduce_mains_subsample
+```
+
 ## Project Structure
 
 ```
@@ -35,7 +74,7 @@ thesis-nam/
 │   │   ├── tune_clarity.py            # Stage-2/3 hp search: clarity_regularization (arms B/C)
 │   │   ├── tune_concurvity_reg.py     # lambda_2 grid sweep across seeds for arm D; writes plot + CSV only
 │   │   └── confirm_regularized_arm.py # after inspecting the sweep plot, commit a lambda_2 value → writes arm D's tuned config
-│   ├── eval/                  # orchestrate + seed training runs; models are only ever built in model_runner.py
+│   ├── eval/                  # orchestrate + seed training runs; models are only ever built in model_runner.py (and tuning scripts)
 │   │   ├── run_na2m_eval.py           # main entry point: k-fold × n_runs loop over all four arms
 │   │   ├── evaluate_na2m_mains.py     # Agarwal reproduction: mains-only, fresh train/val subsample per run
 │   │   └── model_runner.py            # instantiates NA2M and calls into src/na2m; both eval scripts above only orchestrate + set seeds
@@ -72,8 +111,8 @@ y = b + Σ_j f_j(x_j) + Σ_(j,k) f_jk(x_j, x_k)
 
 a type-aware main bank (`FeatureNN` per numerical, `CategNet` per integer-coded
 categorical) plus pairwise interaction subnets that are **built dynamically when
-selected** (no pre-allocation/masking). Terms are keyed by `term_id` — `("main",
-j)` or `("inter", j, k)`, where `j, k` are feature indices — never positionally.
+selected**. Terms are keyed by `term_id`, `("main",j)` or `("inter", j, k)`,
+where `j, k` are feature indices, and never keyed positionally.
 
 ### Four arms
 
@@ -114,19 +153,19 @@ three fine-tune **exactly once**.
 ### Evaluation: store-everything → reducer
 
 Per `(arm, fold, seed)` the evaluator trains once and, while the model is still
-live in memory, immediately extracts everything evaluation will ever need —
+live in memory, immediately extracts everything evaluation will ever need,
 so the model never has to be reloaded later. `extract_measures`
 (`src/na2m/eval/extract.py`) stores four things to `measures.pt`: raw per-subnet
 output vectors on the pool (for the post-hoc concurvity score) and the test fold
 (for stability); summed test logits (for accuracy); the selected pair list; and
 centered main-effect shape curves evaluated on a fixed real-unit grid. The model
-is then discarded — arms B, C, and D do not write a `model.pt`.
+is then discarded, arms B, C, and D do not write a `model.pt`.
 
 Every headline metric is a **pure function of stored measures**, computed by
 `eval/reduce.py` (called from `scripts/reduce/`). `load_fold` loads a fold's
 run dicts; metric functions (`main_effect_instability`, `mean_pairwise_jaccard`,
 `concurvity_summary`, `accuracy_summary`, `selection_frequencies`, `shape_plots`)
-turn them into scalars or figures — no model is ever reloaded, and adding a
+turn them into scalars or figures, no model is ever reloaded, and adding a
 metric never requires retraining.
 
 
@@ -164,42 +203,3 @@ Tuning is done once per fold regardless of how many run modes you evaluate.
 Switching from `fixed` to `subsample` reuses the tuned configs and only
 re-runs the model training. Resume is fully interruptible: the `done` file is
 written last, so a crashed run continues exactly where it left off on rerun.
-
-## Usage
-
-Main thesis results (all four arms, k-fold × n_runs):
-
-Change the config config file for the given datset if you want changes in the search space, amound of fold or runs. 
-Then:
-
-```bash
-python -m scripts.eval.run_na2m_eval
-```
-
-Arm D needs a manual step in between: `run_na2m_eval` runs the `lambda_2` grid
-sweep and prints where the plot + CSV landed, but will not train arm D until a
-value is confirmed. Inspect the sweep plot, then run:
-
-```bash
-python -m scripts.tuning.confirm_regularized_arm
-```
-
-(edit the variables at the top of `main()` to point at the fold and chosen
-`lambda_2`), then rerun `python -m scripts.eval.run_na2m_eval` to train and
-evaluate arm D with the confirmed config.
-
-Agarwal-style mains-only reproduction (subsampled train/val split per run):
-
-```bash
-python -m scripts.eval.evaluate_na2m_mains
-```
-
-If `run_na2m_eval` has already tuned a fold (`mains_tuned_config.yaml` exists),
-tuning is skipped and this just runs in subsample mode, storing measures.
-Otherwise it does its own tuning, mirroring `run_na2m_eval` closely.
-
-Once that's done, aggregate the reproduction result:
-
-```bash
-python -m scripts.reduce.reduce_mains_subsample
-```
