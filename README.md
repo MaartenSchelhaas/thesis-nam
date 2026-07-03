@@ -40,7 +40,7 @@ thesis-nam/
 │   │   ├── evaluate_na2m_mains.py     # Agarwal reproduction: mains-only, fresh train/val subsample per run
 │   │   └── model_runner.py            # instantiates NA2M and calls into src/na2m; both eval scripts above only orchestrate + set seeds
 │   └── reduce/                 # aggregate stored measures into headline numbers/plots
-│       ├── reduce_fold0.py            # print all metrics for a single fold (currently hardcoded to fold_0)
+│       ├── reduce_fold.py             # print all metrics for a single fold (dataset + fold index selected at top of main())
 │       ├── reduce_all_folds.py        # aggregate metrics across all folds
 │       └── reduce_mains_subsample.py  # ensemble accuracy + 95% CI for the Agarwal mains-only reproduction
 ├── runs/                     # training outputs: checkpoints, metrics (Thesis results included)
