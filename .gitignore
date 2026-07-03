@@ -233,11 +233,3 @@ configs/california_housing_na2m_search.yaml
 # Local docs (untracked)
 docs/
 
-
-
-# External reference repos
-GamiNet-master/
-concurvity-regularization-main/
-nam-main-multitask/
-original_neural_additive_models/
-nam-main-multitask/
