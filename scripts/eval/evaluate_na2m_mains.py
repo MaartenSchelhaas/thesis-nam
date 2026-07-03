@@ -21,7 +21,7 @@ The subsample/mains/run_i/ path is the same one run_na2m_eval.py uses in
 subsample mode — shared done sentinels prevent duplicate training if both
 scripts target the same BASE_DIR.
 
-run with: python -m scripts.na2m.evaluate_na2m_mains
+run with: python -m scripts.eval.evaluate_na2m_mains
 """
 
 from pathlib import Path
@@ -32,9 +32,9 @@ from sklearn.model_selection import KFold, train_test_split
 from na2m.data.compas import CompasDataset
 from na2m.data.california_housing import CaliforniaHousingDataset
 from na2m.utils.config import load_na2m_config, load_na2m_search_config
-from scripts.na2m.model_runner import run_main_effects
-from scripts.na2m.tune_main_na2m import tune_fold
-from scripts.na2m.run_na2m_eval import (
+from scripts.eval.model_runner import run_main_effects
+from scripts.tuning.tune_main_na2m import tune_fold
+from scripts.eval.run_na2m_eval import (
     derive_run_seeds,
     derive_fold_split_seeds,
     fold_inner_split,

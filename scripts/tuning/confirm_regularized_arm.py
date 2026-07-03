@@ -22,7 +22,7 @@ What this writes per confirmed fold:
 
 Usage:
     Edit the variables at the top of main() then run:
-        python scripts/na2m/confirm_regularized_arm.py
+        python -m scripts.tuning.confirm_regularized_arm
 """
 
 from datetime import datetime, timezone

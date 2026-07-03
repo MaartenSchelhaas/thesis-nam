@@ -337,7 +337,7 @@ def concurvity_reg_fold(
     print(f"\n[sweep_lambda2] Plot:  {plot_path}")
     print(f"[sweep_lambda2] CSV:   {csv_path}")
     print(f"[sweep_lambda2] Inspect the plot, then confirm with:")
-    print(f"    python scripts/na2m/confirm_regularized_arm.py")
+    print(f"    python -m scripts.tuning.confirm_regularized_arm")
     print(f"    (set fold_dir={out_dir}, lambda2=<your choice>)")
 
     return csv_path

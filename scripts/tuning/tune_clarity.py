@@ -1,7 +1,7 @@
 """
 tune_clarity.py — Optuna search for NA2M clarity_regularization (arm B).
 
-Run AFTER tune_na2m.py. Loads the Stage-1 tuned main-effects config and searches
+Run AFTER tune_main_na2m.py. Loads the Stage-1 tuned main-effects config and searches
 ONLY clarity_regularization, then writes the best value back into the same YAML.
 Arm C later reuses that same config unchanged.
 
@@ -38,9 +38,8 @@ completion.
 The real per-(fold, run) evaluation in run_single.py still runs the FULL pipeline
 via fit_na2m — this train-once shortcut is a TUNING optimisation only.
 
-Usage:
-    python scripts/na2m/tune_clarity.py
-    Edit the variables at the top of main() to point at your configs.
+tune_clarity_fold() is called directly by run_na2m_eval.py's fold loop — this
+module has no standalone entry point.
 """
 
 import copy

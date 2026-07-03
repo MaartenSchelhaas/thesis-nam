@@ -25,7 +25,7 @@ Output layout:
                 gaminet/run_i/    measures.pt, done
                 concurvity/run_i/ measures.pt, done
 
-run with: python -m scripts.na2m.run_na2m_eval                
+run with: python -m scripts.eval.run_na2m_eval
 """
 
 from pathlib import Path
@@ -36,14 +36,14 @@ from sklearn.model_selection import KFold, train_test_split
 from na2m.data.compas import CompasDataset
 from na2m.data.california_housing import CaliforniaHousingDataset
 from na2m.utils.config import load_na2m_config, load_na2m_search_config
-from scripts.na2m.model_runner import (
+from scripts.eval.model_runner import (
     run_main_effects,
     run_arm,
     _ARM_FLAGS,
 )
-from scripts.na2m.tune_main_na2m import tune_fold
-from scripts.na2m.tune_clarity import tune_clarity_fold
-from scripts.na2m.tune_concurvity_reg import concurvity_reg_fold
+from scripts.tuning.tune_main_na2m import tune_fold
+from scripts.tuning.tune_clarity import tune_clarity_fold
+from scripts.tuning.tune_concurvity_reg import concurvity_reg_fold
 
 
 # --------------------------------------------------------------------------- #
@@ -420,7 +420,8 @@ def main() -> None:
     # ------------------------------ PARAMS ------------------------------ #
     # --- Dataset (swap these two lines to switch) ---
     # SEARCH_CONFIG_PATH = r"C:\Users\maart\OneDrive\Documenten\Universiteit\Scriptie\python_repo\thesis-nam\configs\compas_na2m_search.yaml"
-    # DATASET = CompasDataset();  DATASET_NAME = "compas"
+    # DATASET = CompasDataset();  
+    # DATASET_NAME = "compas"
     SEARCH_CONFIG_PATH = r"C:\Users\maart\OneDrive\Documenten\Universiteit\Scriptie\python_repo\thesis-nam\configs\california_housing_na2m_search.yaml"
     DATASET      = CaliforniaHousingDataset()
     DATASET_NAME = "california_housing"

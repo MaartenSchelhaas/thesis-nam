@@ -1,6 +1,6 @@
 """
 reduce_all_folds.py — cross-fold aggregate of all reducer metrics.
-Run from repo root: python -m scripts.na2m.reduce_all_folds
+Run from repo root: python -m scripts.reduce.reduce_all_folds
 
 Each section reports the cross-fold mean ± std of per-fold scalars.
 Per-fold detail (individual pair tables, shape plots) lives in reduce_fold0.py.

@@ -1,6 +1,6 @@
 """
 reduce_fold0.py — compute and display all reducer metrics for fold_0.
-Run from repo root: python -m scripts.na2m.reduce_fold0
+Run from repo root: python -m scripts.reduce.reduce_fold0
 """
 from pathlib import Path
 

@@ -5,7 +5,7 @@ Loads measures.pt from evaluate_na2m_mains.py output (subsample/mains/run_i/),
 calls accuracy_summary per fold (which handles the logit averaging), then aggregates
 the 5 ensemble values into a point estimate + 95% CI — matching the Agarwal et al. protocol.
 
-run with: python -m scripts.na2m.reduce_mains_subsample
+run with: python -m scripts.reduce.reduce_mains_subsample
 """
 
 import numpy as np

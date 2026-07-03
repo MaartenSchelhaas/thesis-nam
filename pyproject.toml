@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "nam"
+name = "na2m"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
@@ -18,10 +18,7 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-# src layout with two top-level packages: the frozen NAM reproduction (`nam`)
-# and the NA2M extension (`na2m`). Both must be packaged explicitly because the
-# project name ("nam") only auto-discovers the matching package.
-packages = ["src/nam", "src/na2m"]
+packages = ["src/na2m"]
 
 [project.optional-dependencies]
 dev = [

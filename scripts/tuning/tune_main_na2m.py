@@ -1,5 +1,5 @@
 """
-tune_na2m.py — Optuna hyperparameter search for NA2M main effects (arm A).
+tune_main_na2m.py — Optuna hyperparameter search for NA2M main effects (arm A).
 
 Tunes Stage-1 hyperparameters (lr, dropout, regularization, activation) with
 interactions disabled. clarity_regularization is NOT in this search space — it
@@ -8,9 +8,8 @@ is tuned separately by tune_clarity.py once the main-effects config is fixed.
 Pruning works: trial is threaded into the Stage-1 Trainer so Optuna's
 MedianPruner can cut bad trials early on intermediate validation metrics.
 
-Usage:
-    python scripts/na2m/tune_na2m.py
-    Edit the variables at the top of main() to point at your search YAML.
+tune_fold() is called directly by run_na2m_eval.py's fold loop — this module
+has no standalone entry point.
 """
 
 import numpy as np
@@ -21,8 +20,6 @@ import torch
 import yaml
 from torch.utils.data import DataLoader
 
-from na2m.data.shared import split
-from na2m.data.compas import CompasDataset
 from na2m.models.na2m import NA2M
 from na2m.training.fit_na2m import fit_na2m
 from na2m.utils.config import NA2MConfig, load_na2m_search_config
@@ -209,42 +206,3 @@ def tune_fold(
 
     save_best_config(study, fixed_params, output_path)
     return output_path
-
-
-def main() -> None:
-    # --- Edit these ---
-    _CONFIG = r"C:\Users\maart\OneDrive\Documenten\Universiteit\Scriptie\python_repo\thesis-nam\configs\compas_na2m_search.yaml"
-    DATASET = CompasDataset()
-    DATASET_NAME = "compas"
-    # ------------------
-
-    fixed_params, search_space = load_na2m_search_config(_CONFIG)
-
-    df = DATASET.load(fixed_params.get("dataset_path"))
-    X, y, feature_meta = DATASET.preprocess(df)
-    X_train, X_val, X_test, y_train, y_val, y_test = split(
-        X,
-        y,
-        fixed_params["val_frac"],
-        fixed_params["test_frac"],
-        fixed_params.get("seed", 42),
-        stratify=(DATASET.TASK == "classification"),
-    )
-
-    output_path = Path(_CONFIG).parent / f"{DATASET_NAME}_na2m_tuned.yaml"
-
-    tune_fold(
-        fixed_params,
-        search_space,
-        feature_meta,
-        X_train,
-        y_train,
-        X_val,
-        y_val,
-        output_path,
-        study_name=f"{dataset_name}_na2m_main_search",
-    )
-
-
-if __name__ == "__main__":
-    main()
