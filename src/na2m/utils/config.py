@@ -12,86 +12,56 @@ import yaml
 class NA2MConfig:
     dataset_path: str = ""
 
-    # ------------------------------------------------------------------ #
-    # Main subnet architecture                                             #
-    # ------------------------------------------------------------------ #
-
+    # Main subnet architecture
     num_units: int = 64
     hidden_sizes: list = field(default_factory=lambda: [64, 32])
     activation: str = "exu"
     dropout: float = 0.5
 
-    # ------------------------------------------------------------------ #
-    # Interaction subnet architecture                                      #
-    # ------------------------------------------------------------------ #
-
+    # Interaction subnet architecture
     inter_units: int = 32
     inter_hidden: list = field(default_factory=lambda: [])
     feature_dropout: float = 0.0
 
-    # ------------------------------------------------------------------ #
-    # Regularisation                                                       #
-    # ------------------------------------------------------------------ #
-
+    # Regularisation
     output_regularization: float = 0.0
     l2_regularization: float = 0.0
-    clarity_regularization: float = 0.0  # λ_1 on the GAMI-Net marginal-clarity penalty (stage 3)
-    concurvity_regularization: float = 0.0  # λ_2 on the Siems et al. R_perp pairwise concurvity penalty (stage 3, arm D only)
+    clarity_regularization: float = 0.0     # λ_1, GAMI-Net marginal-clarity penalty (stage 3)
+    concurvity_regularization: float = 0.0  # λ_2, Siems et al. R_perp penalty (stage 3, arm D only)
 
-    # ------------------------------------------------------------------ #
-    # Optimiser                                                            #
-    # ------------------------------------------------------------------ #
-
+    # Optimiser
     lr: float = 1e-3
     decay_rate: float = 0.995
 
-    # ------------------------------------------------------------------ #
-    # Data split                                                           #
-    # ------------------------------------------------------------------ #
-
+    # Data split
     val_frac: float = 0.15
     test_frac: float = 0.15
     seed: int = 42
     pool_val_frac: float = 0.15  # inner train/val split of the fold's 80% pool; keyed off the fold, never the run seed
 
-    # ------------------------------------------------------------------ #
-    # Training loop                                                        #
-    # ------------------------------------------------------------------ #
-
+    # Training loop
     batch_size: int = 1024
     num_epochs: int = 1000
     patience: int = 60
     val_check_interval: int = 10
 
-    # ------------------------------------------------------------------ #
-    # Stage 2 — interaction selection                                      #
-    # ------------------------------------------------------------------ #
-
+    # Stage 2 — interaction selection
     top_m: int = 10                  # FAST candidate pairs to block-train before the sweep
     eta_prune: float = 0.0           # predictive-contribution gate tolerance (0 = cut at argmin)
     block_train_epochs: int = 1000   # epochs for the joint interaction block-training step
     finetune_epochs: int = 100       # epochs for the single Stage-3 fine-tune
 
-    # ------------------------------------------------------------------ #
-    # Concurvity gate (arm C only)                                        #
-    # ------------------------------------------------------------------ #
-
-    concurvity_filter: bool = True       # False → arm B; True → arm C
+    # Concurvity gate (arm C only)
+    concurvity_filter: bool = True      # False → arm B; True → arm C
     concurvity_threshold: float = 0.5   # adj-R² threshold; candidates above this are skipped
 
-    # ------------------------------------------------------------------ #
-    # Evaluation                                                           #
-    # ------------------------------------------------------------------ #
-
+    # Evaluation
     k_folds: int = 5
     fold_seed: int = 42
     seeds: list = field(default_factory=lambda: [0, 1, 2, 3, 4])
     grid_size: int = 256  # grid points per numerical feature for shape curves
 
-    # ------------------------------------------------------------------ #
-    # Task                                                                 #
-    # ------------------------------------------------------------------ #
-
+    # Task
     task: str = "classification"  # 'classification' or 'regression'
 
 

@@ -93,9 +93,8 @@ def l2_penalty(model: nn.Module, num_features: int, lambda2: float) -> torch.Ten
     Returns:
         torch.Tensor: Scalar penalty tensor.
     """
-    # Initialise the accumulator on the model's device. The frozen NAM copy used
-    # torch.tensor(0.0) (CPU), which raises a "two devices" error once params live
-    # on CUDA — NAM only escaped it by running on CPU.
+    # Initialise the accumulator on the model's device — torch.tensor(0.0) (CPU)
+    # would raise a "two devices" error once params live on CUDA.
     device = next(model.parameters()).device
     l2_sum = torch.zeros((), device=device)
 

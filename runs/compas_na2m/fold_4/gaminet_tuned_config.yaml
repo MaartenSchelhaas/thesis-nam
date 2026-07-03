@@ -1,0 +1,27 @@
+batch_size: 1024
+block_train_epochs: 500
+concurvity_threshold: 0.5
+decay_rate: 0.995
+eta_prune: 0.01
+finetune_epochs: 500
+hidden_sizes:
+- 64
+- 32
+inter_hidden: []
+inter_units: 32
+num_epochs: 500
+num_units: 64
+patience: 25
+seed: 42
+task: classification
+test_frac: 0.2
+top_m: 10
+val_check_interval: 10
+val_frac: 0.1
+activation: relu
+dropout: 0.05
+feature_dropout: 0.05
+l2_regularization: 3.722419059312857e-05
+lr: 0.020333025214004433
+output_regularization: 0.0035103056566377073
+clarity_regularization: 0.00574058714346197

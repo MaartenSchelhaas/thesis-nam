@@ -50,8 +50,8 @@ class CaliforniaHousingDataset:
             DataFrame with columns matching NUMERICAL_FEATURES + TARGET_COLUMN.
         """
         bunch = fetch_california_housing(as_frame=False)
-        df = pd.DataFrame(bunch.data, columns=self.NUMERICAL_FEATURES)
-        df[self.TARGET_COLUMN] = bunch.target
+        df = pd.DataFrame(bunch.data, columns=self.NUMERICAL_FEATURES)  # type: ignore[attr-defined]
+        df[self.TARGET_COLUMN] = bunch.target  # type: ignore[attr-defined]
         return df
 
     def preprocess(self, df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, list[FeatureMeta]]:

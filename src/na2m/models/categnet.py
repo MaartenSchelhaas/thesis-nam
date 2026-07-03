@@ -11,7 +11,7 @@ depth still collapses to one learned scalar per level.
 No output bias — the global NA2M bias owns the intercept.
 Output shape: (batch_size, 1) — identical to FeatureNN so terms concatenate.
 
-Reference: GamiNet-master CategNet (TensorFlow).
+Reference: GAMI-Net's CategNet (Yang et al., 2021), reimplemented in PyTorch.
 """
 
 import torch
@@ -28,10 +28,6 @@ class CategNet(nn.Module):
     No hidden layers needed: one-hot inputs are mutually exclusive so hidden
     layers cannot learn cross-level interactions.
     """
-
-    # TODO: add moving_mean tracking (needed for marginal clarity penalty, stage 3)
-    # See GamiNet-master NAMNet.call() — same pattern as CategNet, subnet_mean
-    # tracked during training and used in NA2M.clarity_loss().
 
     def __init__(self, n_levels: int):
         """

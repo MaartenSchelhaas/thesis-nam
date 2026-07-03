@@ -10,7 +10,7 @@ No output bias — the global NAM bias owns the intercept.
 Output shape: (batch_size, 1) — identical across all subnets so NAM can
 torch.cat across features into (batch_size, num_features).
 
-Reference: original_neural_additive_models/models.py FeatureNN
+Reference: Agarwal et al. (2021), Neural Additive Models — FeatureNN architecture.
 """
 
 import torch
@@ -22,7 +22,7 @@ class FeatureNN(nn.Module):
     """Single-feature subnet: maps scalar input x_i → scalar output f_i(x_i)."""
 
     # TODO: moving_mean tracking for the marginal clarity penalty (NA2M stage 3).
-    # Pattern mirrors GamiNet-master NAMNet.call() — track subnet_mean during
+    # Pattern mirrors GAMI-Net's NAMNet.call() (Yang et al., 2021) — track subnet_mean during
     # training, update a moving_mean buffer, expose it to NA2M.clarity_loss().
     # Implement here and in CategNet at the same time so both expose the same
     # interface. Do not add until clarity_loss() is being implemented.

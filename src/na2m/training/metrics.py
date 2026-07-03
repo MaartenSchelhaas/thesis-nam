@@ -6,9 +6,6 @@ never has to remember to apply sigmoid before computing metrics.
 
 Classification: AUROC
 Regression:     RMSE
-
-Copied verbatim from src/nam/training/metrics.py to keep src/na2m/ standalone.
-No edits.
 """
 
 import torch

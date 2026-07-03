@@ -217,15 +217,15 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-#Data
-.csv
-.parquet
-.xlsx
-datasets/
+#Data -> Hand in data
+#.csv
+#.parquet
+#.xlsx
+#datasets/
 
-# Claude Code
-CLAUDE.md
-.claude
+# Training run artifacts
+runs/california_housing_na2m
+configs/california_housing_na2m_search.yaml
 
 #Vscode
 .vscode
@@ -233,8 +233,3 @@ CLAUDE.md
 # Local docs (untracked)
 docs/
 
-# Training run artifacts
-runs/
-
-# External reference repos
-GamiNet-master/

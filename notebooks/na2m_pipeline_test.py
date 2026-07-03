@@ -24,7 +24,7 @@ import yaml
 
 from na2m.data.compas import CompasDataset
 from na2m.utils.config import load_na2m_search_config
-from scripts.na2m.run_na2m_eval import evaluate_na2m
+from scripts.eval.run_na2m_eval import evaluate_na2m
 
 # --------------------------------------------------------------------------- #
 # Parameters                                                                    #

@@ -1,5 +1,5 @@
 """
-concurvity — the ONE adjusted-R² concurvity formula, shared by gate and diagnostic.
+concurvity: the ONE adjusted-R² concurvity formula, shared by gate and diagnostic.
 
 Centering is handled by the OLS intercept (fit WITH intercept ⇔
 center every column over THIS sample), so callers can pass raw vectors.

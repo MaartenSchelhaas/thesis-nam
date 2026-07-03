@@ -1,8 +1,5 @@
 """
-ExU activation layer
-
-Copied verbatim from src/nam/models/activation/exu.py to keep src/na2m/
-standalone. No edits.
+ExU activation layer — Agarwal et al. (2021), Neural Additive Models.
 """
 
 import torch

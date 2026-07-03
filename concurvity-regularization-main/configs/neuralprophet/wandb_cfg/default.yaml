@@ -1,3 +1,0 @@
-name: neuralprophet_${dataset_cfg.name}_${now:%Y_%m_%d_%H_%M_%S}
-project: concurvity
-group: concurvity_comparison_2

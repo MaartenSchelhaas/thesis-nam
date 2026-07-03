@@ -160,7 +160,7 @@ def mean_pairwise_jaccard(
 
     Args:
         fold_measures: Output of load_fold.
-        arm: "gaminet" or "concurvity".
+        arm: Which arm this gets ran on. 
 
     Returns:
         Mean pairwise Jaccard in [0, 1]. nan if fewer than 2 runs.
@@ -193,7 +193,7 @@ def concurvity_summary(
 ) -> dict:
     """Post-hoc concurvity of main effects and interactions against all other fitted terms.
 
-    Uses subnet_vectors_pool. For each subnet, regresses its pool vector on all
+    Uses subnet_vectors_pool. For each subnet, regresses its output vector on all
     other subnets via OLS adj-R² (concurvity_score). Main effects are included
     for all arms; interactions only for arms B and C.
 
@@ -203,8 +203,7 @@ def concurvity_summary(
 
     Scores are aggregated per run (mean over that run's terms), then mean ± std
     across runs. frac_concurve is the number of concurve terms in that category
-    divided by the TOTAL number of subnets in the run (mains + interactions), so
-    mains and interactions share the same denominator and are directly comparable.
+    divided by the TOTAL number of subnets in the run (mains + interactions).
 
     Args:
         fold_measures: Output of load_fold.
