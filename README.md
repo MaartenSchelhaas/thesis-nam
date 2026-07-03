@@ -10,7 +10,7 @@ pip install -e .
 
 Requires Python 3.10+. Core dependencies: `torch`, `numpy`, `pandas`, `scikit-learn`, `matplotlib`, `optuna`, `pyyaml`. This is enough to run every script in `scripts/`.
 
-To also run the notebooks (or use `pytest`/`ruff`/`mypy`), install the `dev` extra instead:
+To also run the notebooks (or use `pytest`, no tests are in this repo though), install the `dev` extra instead:
 
 ```bash
 pip install -e ".[dev]"
